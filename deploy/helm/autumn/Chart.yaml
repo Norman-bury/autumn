@@ -1,0 +1,33 @@
+apiVersion: v2
+name: autumn
+description: Self-hosted job application tracker for applications, job leads, files, and analytics
+type: application
+version: 0.1.7
+appVersion: "0.1.7"
+kubeVersion: ">=1.23.0-0"
+home: https://github.com/Norman-bury/autumn
+icon: https://raw.githubusercontent.com/Norman-bury/autumn/main/documentation/static/img/favicon.png
+sources:
+  - https://github.com/Norman-bury/autumn
+keywords:
+  - autumn
+  - applications
+  - careers
+  - self-hosted
+  - tracking
+maintainers:
+  - name: Norman Bury
+    url: https://github.com/Norman-bury
+annotations:
+  artifacthub.io/category: skip-prediction
+  artifacthub.io/license: MIT
+  artifacthub.io/links: |
+    - name: documentation
+      url: https://Norman-bury.github.io/autumn/
+    - name: support
+      url: https://github.com/Norman-bury/autumn/issues
+    - name: source
+      url: https://github.com/Norman-bury/autumn
+  artifacthub.io/images: |
+    - name: autumn
+      image: ghcr.io/Norman-bury/autumn:0.1.7

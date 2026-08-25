@@ -1,0 +1,1039 @@
+"""Tests for export functionality with SQLite and PostgreSQL compatibility.
+
+These tests verify that the export functionality works correctly with both
+SQLite and PostgreSQL databases, ensuring data integrity and completeness.
+"""
+
+import csv
+import io
+import json
+import zipfile
+from datetime import date, datetime
+from pathlib import Path
+
+import pytest
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
+from starlette.responses import FileResponse
+
+from app.core.security import create_access_token, get_password_hash
+from app.models import (
+    Application,
+    ApplicationStatus,
+    ApplicationStatusHistory,
+    MediaType,
+    Round,
+    RoundMedia,
+    RoundType,
+    User,
+)
+
+
+@pytest.fixture
+async def test_user(db: AsyncSession) -> User:
+    """Create a test user with admin privileges."""
+    user = User(
+        email="test@example.com",
+        password_hash=get_password_hash("testpass123"),
+        is_admin=True,
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@pytest.fixture
+async def test_statuses(db: AsyncSession, test_user: User) -> list[ApplicationStatus]:
+    """Create test application statuses."""
+    statuses = [
+        ApplicationStatus(
+            name="Wishlist", color="#83a598", is_default=True, user_id=test_user.id
+        ),
+        ApplicationStatus(
+            name="Applied", color="#8ec07c", is_default=True, user_id=test_user.id
+        ),
+        ApplicationStatus(
+            name="Interview", color="#fe8019", is_default=True, user_id=test_user.id
+        ),
+        ApplicationStatus(
+            name="Offer", color="#fabd2f", is_default=True, user_id=test_user.id
+        ),
+        ApplicationStatus(
+            name="Rejected", color="#fb4934", is_default=True, user_id=test_user.id
+        ),
+    ]
+    for status in statuses:
+        db.add(status)
+    await db.commit()
+    for status in statuses:
+        await db.refresh(status)
+    return statuses
+
+
+@pytest.fixture
+async def test_round_types(db: AsyncSession, test_user: User) -> list[RoundType]:
+    """Create test round types."""
+    round_types = [
+        RoundType(name="Phone Screen", is_default=True, user_id=test_user.id),
+        RoundType(name="Technical Interview", is_default=True, user_id=test_user.id),
+        RoundType(name="Onsite", is_default=True, user_id=test_user.id),
+    ]
+    for round_type in round_types:
+        db.add(round_type)
+    await db.commit()
+    for round_type in round_types:
+        await db.refresh(round_type)
+    return round_types
+
+
+@pytest.fixture
+async def test_applications(
+    db: AsyncSession,
+    test_user: User,
+    test_statuses: list[ApplicationStatus],
+    test_round_types: list[RoundType],
+) -> list[Application]:
+    """Create test applications with various states."""
+    applications = []
+
+    # Application 1: Simple application with no rounds or status history
+    app1 = Application(
+        user_id=test_user.id,
+        company="Tech Corp",
+        job_title="Software Engineer",
+        job_description="Build great software",
+        job_url="https://techcorp.com/jobs/1",
+        status_id=test_statuses[1].id,  # Applied
+        cv_path="/cvs/resume1.pdf",
+        applied_at=date(2024, 1, 15),
+    )
+    db.add(app1)
+    applications.append(app1)
+
+    # Application 2: Application with rounds but no status history
+    app2 = Application(
+        user_id=test_user.id,
+        company="Startup Inc",
+        job_title="Full Stack Developer",
+        job_description="Join our fast-growing team",
+        job_url="https://startupinc.com/careers/dev",
+        status_id=test_statuses[2].id,  # Interview
+        cv_path="/cvs/resume2.pdf",
+        applied_at=date(2024, 1, 20),
+    )
+    db.add(app2)
+    await db.flush()  # Flush to get app2.id
+    applications.append(app2)
+
+    # Add rounds to app2
+    round1 = Round(
+        application_id=app2.id,
+        round_type_id=test_round_types[0].id,  # Phone Screen
+        scheduled_at=datetime(2024, 1, 22, 10, 0),
+        completed_at=datetime(2024, 1, 22, 10, 30),
+        outcome="Passed",
+        notes_summary="Great conversation about React",
+    )
+    db.add(round1)
+    await db.flush()
+
+    # Add media to round1
+    media1 = RoundMedia(
+        round_id=round1.id,
+        file_path="/media/interview1.mp4",
+        media_type=MediaType.VIDEO,
+    )
+    db.add(media1)
+
+    round2 = Round(
+        application_id=app2.id,
+        round_type_id=test_round_types[1].id,  # Technical Interview
+        scheduled_at=datetime(2024, 1, 25, 14, 0),
+        completed_at=None,
+        outcome=None,
+        notes_summary="Coding challenge scheduled",
+    )
+    db.add(round2)
+
+    # Application 3: Application with status history but no rounds
+    app3 = Application(
+        user_id=test_user.id,
+        company="Big Tech Company",
+        job_title="Senior Backend Engineer",
+        job_description="Scale our systems",
+        job_url="https://bigtech.com/jobs/backend",
+        status_id=test_statuses[3].id,  # Offer
+        cv_path="/cvs/resume3.pdf",
+        applied_at=date(2024, 1, 10),
+    )
+    db.add(app3)
+    await db.flush()  # Flush to get app3.id
+    applications.append(app3)
+
+    # Add status history to app3
+    history1 = ApplicationStatusHistory(
+        application_id=app3.id,
+        from_status_id=None,
+        to_status_id=test_statuses[0].id,  # Wishlist
+        changed_at=datetime(2024, 1, 8, 9, 0),
+        note="Added to wishlist",
+    )
+    db.add(history1)
+
+    history2 = ApplicationStatusHistory(
+        application_id=app3.id,
+        from_status_id=test_statuses[0].id,  # Wishlist
+        to_status_id=test_statuses[1].id,  # Applied
+        changed_at=datetime(2024, 1, 10, 10, 30),
+        note="Applied through portal",
+    )
+    db.add(history2)
+
+    history3 = ApplicationStatusHistory(
+        application_id=app3.id,
+        from_status_id=test_statuses[1].id,  # Applied
+        to_status_id=test_statuses[2].id,  # Interview
+        changed_at=datetime(2024, 1, 15, 14, 0),
+        note="Phone screen went well",
+    )
+    db.add(history3)
+
+    history4 = ApplicationStatusHistory(
+        application_id=app3.id,
+        from_status_id=test_statuses[2].id,  # Interview
+        to_status_id=test_statuses[3].id,  # Offer
+        changed_at=datetime(2024, 1, 25, 16, 0),
+        note="Received offer!",
+    )
+    db.add(history4)
+
+    # Application 4: Application with both rounds and status history
+    app4 = Application(
+        user_id=test_user.id,
+        company="Amazing Startup",
+        job_title="Frontend Developer",
+        job_description="Build beautiful UIs",
+        job_url="https://amazingstartup.com/jobs/frontend",
+        status_id=test_statuses[4].id,  # Rejected
+        cv_path="/cvs/resume4.pdf",
+        applied_at=date(2024, 1, 5),
+    )
+    db.add(app4)
+    await db.flush()  # Flush to get app4.id
+    applications.append(app4)
+
+    # Add status history to app4
+    history5 = ApplicationStatusHistory(
+        application_id=app4.id,
+        from_status_id=None,
+        to_status_id=test_statuses[1].id,  # Applied
+        changed_at=datetime(2024, 1, 5, 11, 0),
+        note="Applied",
+    )
+    db.add(history5)
+
+    history6 = ApplicationStatusHistory(
+        application_id=app4.id,
+        from_status_id=test_statuses[1].id,  # Applied
+        to_status_id=test_statuses[4].id,  # Rejected
+        changed_at=datetime(2024, 1, 18, 9, 0),
+        note="Not moving forward",
+    )
+    db.add(history6)
+
+    # Add rounds to app4
+    round3 = Round(
+        application_id=app4.id,
+        round_type_id=test_round_types[0].id,  # Phone Screen
+        scheduled_at=datetime(2024, 1, 10, 11, 0),
+        completed_at=datetime(2024, 1, 10, 11, 45),
+        outcome="Rejected",
+        notes_summary="Didn't have enough React experience",
+    )
+    db.add(round3)
+    await db.flush()
+
+    # Add multiple media files to round3
+    media2 = RoundMedia(
+        round_id=round3.id,
+        file_path="/media/phone_screen.mp4",
+        media_type=MediaType.VIDEO,
+    )
+    db.add(media2)
+
+    media3 = RoundMedia(
+        round_id=round3.id,
+        file_path="/media/phone_screen_audio.mp3",
+        media_type=MediaType.AUDIO,
+    )
+    db.add(media3)
+
+    await db.commit()
+    for app in applications:
+        await db.refresh(app)
+    return applications
+
+
+@pytest.fixture
+def auth_headers(test_user: User) -> dict[str, str]:
+    """Create authentication headers for test user."""
+    token = create_access_token({"sub": test_user.id})
+    return {"Authorization": f"Bearer {token}"}
+
+
+class TestJSONExport:
+    """Test JSON export functionality."""
+
+    async def test_json_export_includes_all_data(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test JSON export includes all related data."""
+        response = await client.get(
+            "/api/export/json",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+
+        # Verify new introspective export structure
+        assert "user" in data
+        assert "models" in data
+        assert "format_version" in data
+        assert "export_timestamp" in data
+
+        # Verify user data
+        assert data["user"]["email"] == "test@example.com"
+
+        # Verify we have all applications in the models dict
+        assert "Application" in data["models"]
+        assert len(data["models"]["Application"]) == 4
+
+        # Verify each application has core fields (introspective serialization)
+        for app in data["models"]["Application"]:
+            assert "company" in app
+            assert "job_title" in app
+            assert "status_id" in app
+
+    async def test_json_export_simple_application(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test JSON export for application with no rounds or status history."""
+        response = await client.get("/api/export/json", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        app1_data = next(
+            (
+                app
+                for app in data["models"]["Application"]
+                if app["company"] == "Tech Corp"
+            ),
+            None,
+        )
+
+        assert app1_data is not None
+        assert app1_data["job_title"] == "Software Engineer"
+        assert app1_data["cv_path"] == "/cvs/resume1.pdf"
+
+    async def test_json_export_application_with_rounds(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test JSON export for application with rounds."""
+        response = await client.get("/api/export/json", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        # Verify rounds exist in export
+        assert "Round" in data["models"]
+        rounds = data["models"]["Round"]
+
+        # Find rounds for Startup Inc application
+        startup_app = next(
+            (
+                app
+                for app in data["models"]["Application"]
+                if app["company"] == "Startup Inc"
+            ),
+            None,
+        )
+        assert startup_app is not None
+
+        # Find rounds that belong to this application
+        startup_rounds = [
+            r
+            for r in rounds
+            if r.get("application_id") == startup_app.get("__original_id__")
+        ]
+        assert len(startup_rounds) == 2
+
+    async def test_json_export_status_history(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test JSON export includes status history."""
+        response = await client.get("/api/export/json", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+
+        # Verify status history exists in export
+        assert "ApplicationStatusHistory" in data["models"]
+
+        # Find the Big Tech Company application
+        bigtech_app = next(
+            (
+                app
+                for app in data["models"]["Application"]
+                if app["company"] == "Big Tech Company"
+            ),
+            None,
+        )
+        assert bigtech_app is not None
+
+        # Find status history for this application
+        bigtech_history = [
+            h
+            for h in data["models"]["ApplicationStatusHistory"]
+            if h.get("application_id") == bigtech_app.get("__original_id__")
+        ]
+        assert len(bigtech_history) == 4
+
+    async def test_json_export_rounds_and_status_history(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test JSON export for application with both rounds and status history."""
+        response = await client.get("/api/export/json", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+
+        # Find the Amazing Startup application
+        amazing_app = next(
+            (
+                app
+                for app in data["models"]["Application"]
+                if app["company"] == "Amazing Startup"
+            ),
+            None,
+        )
+        assert amazing_app is not None
+
+        # Find status history and rounds for this application
+        amazing_history = [
+            h
+            for h in data["models"]["ApplicationStatusHistory"]
+            if h.get("application_id") == amazing_app.get("__original_id__")
+        ]
+        assert len(amazing_history) == 2
+
+        amazing_rounds = [
+            r
+            for r in data["models"]["Round"]
+            if r.get("application_id") == amazing_app.get("__original_id__")
+        ]
+        assert len(amazing_rounds) == 1
+
+        # Verify RoundMedia exists
+        assert "RoundMedia" in data["models"]
+        round_media = [
+            m
+            for m in data["models"]["RoundMedia"]
+            if m.get("round_id") == amazing_rounds[0].get("__original_id__")
+        ]
+        assert len(round_media) == 2
+
+
+class TestCSVExport:
+    """Test CSV export functionality."""
+
+    async def test_csv_export_includes_rounds(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test CSV export includes round information."""
+        response = await client.get(
+            "/api/export/csv",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        content = response.text
+        lines = content.split("\n")
+
+        # Verify header includes round columns
+        assert "Round Type" in lines[0]
+        assert "Round Status" in lines[0]
+        assert "Round Outcome" in lines[0]
+        assert "Round Notes" in lines[0]
+        assert "Round Media" in lines[0]
+
+        # Verify data rows have round data
+        assert len(lines) > 1  # Has data rows
+
+    async def test_csv_export_simple_application(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test CSV export for application with no rounds or status history."""
+        response = await client.get("/api/export/csv", headers=auth_headers)
+        assert response.status_code == 200
+
+        content = response.text
+        lines = [line for line in content.split("\n") if line.strip()]
+
+        # Find the row for Tech Corp
+        tech_corp_row = next((line for line in lines if "Tech Corp" in line), None)
+        assert tech_corp_row is not None
+
+        reader = csv.reader(io.StringIO(tech_corp_row))
+        row = next(reader)
+
+        assert row[0] == "Tech Corp"  # Company
+        assert row[1] == "Software Engineer"  # Job Title
+        assert row[2] == "Applied"  # Status
+
+    async def test_csv_export_application_with_rounds(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test CSV export for application with rounds."""
+        response = await client.get("/api/export/csv", headers=auth_headers)
+        assert response.status_code == 200
+
+        content = response.text
+
+        # Check that the CSV contains Phone Screen round data for Startup Inc
+        assert "Startup Inc" in content
+        assert "Phone Screen" in content
+
+        # Find the line with both Startup Inc and Phone Screen
+        lines = content.split("\n")
+        phone_screen_line = next(
+            (
+                line
+                for line in lines
+                if "Startup Inc" in line and "Phone Screen" in line
+            ),
+            None,
+        )
+        assert phone_screen_line is not None, (
+            "No line found with both 'Startup Inc' and 'Phone Screen'"
+        )
+
+        # Verify the line contains expected round information
+        assert "Completed" in phone_screen_line
+        assert "Passed" in phone_screen_line
+
+    async def test_csv_export_status_history(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test CSV export includes status history."""
+        response = await client.get("/api/export/csv", headers=auth_headers)
+        assert response.status_code == 200
+
+        content = response.text
+
+        # Check that the CSV contains status history data for Big Tech Company
+        assert "Big Tech Company" in content
+
+        # The CSV should contain status transitions
+        assert (
+            "Wishlist -> Applied" in content
+            or "Applied -> Interview" in content
+            or "Interview -> Offer" in content
+        )
+
+        # Find a line with Big Tech Company and status history
+        lines = content.split("\n")
+        status_line = next(
+            (line for line in lines if "Big Tech Company" in line and ("->" in line)),
+            None,
+        )
+        assert status_line is not None, (
+            "No line found with 'Big Tech Company' and status history"
+        )
+
+    async def test_csv_export_rounds_and_status_history(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test CSV export for application with both rounds and status history."""
+        response = await client.get("/api/export/csv", headers=auth_headers)
+        assert response.status_code == 200
+
+        content = response.text
+        lines = [line for line in content.split("\n") if line.strip()]
+
+        # Find rows for Amazing Startup
+        amazing_rows = [line for line in lines if "Amazing Startup" in line]
+        # Should have 2 status history entries + 1 round = 3 rows
+        # But the first status history entry is paired with the round
+        assert len(amazing_rows) >= 2
+
+    async def test_csv_export_multiple_media_files(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test CSV export handles multiple media files correctly."""
+        response = await client.get("/api/export/csv", headers=auth_headers)
+        assert response.status_code == 200
+
+        content = response.text
+
+        # Check that the CSV contains media file data for Amazing Startup
+        assert "Amazing Startup" in content
+        assert "phone_screen.mp4" in content
+        assert "phone_screen_audio.mp3" in content
+
+        # Find the line with both Amazing Startup and phone_screen.mp4
+        lines = content.split("\n")
+        media_line = next(
+            (
+                line
+                for line in lines
+                if "Amazing Startup" in line and "phone_screen.mp4" in line
+            ),
+            None,
+        )
+        assert media_line is not None, (
+            "No line found with both 'Amazing Startup' and 'phone_screen.mp4'"
+        )
+
+        # Verify the line contains both media files
+        assert "phone_screen_audio.mp3" in media_line
+
+
+class TestDataConsistency:
+    """Test data consistency between JSON and CSV exports."""
+
+    async def test_export_data_consistency(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test JSON and CSV exports contain the same core data."""
+        json_response = await client.get("/api/export/json", headers=auth_headers)
+        csv_response = await client.get("/api/export/csv", headers=auth_headers)
+
+        assert json_response.status_code == 200
+        assert csv_response.status_code == 200
+
+        json_data = json_response.json()
+        csv_data = csv_response.text
+
+        # Both should have the same number of applications
+        json_app_count = len(json_data.get("models", {}).get("Application", []))
+
+        # Count CSV unique applications (by company name)
+        csv_lines = csv_data.split("\n")
+        csv_companies = set()
+        for line in csv_lines[1:]:  # Skip header
+            if line.strip():
+                try:
+                    row = next(csv.reader(io.StringIO(line)))
+                    if row and len(row) > 0:  # Ensure row is not empty
+                        csv_companies.add(row[0])
+                except StopIteration:
+                    continue
+
+        csv_app_count = len(csv_companies)
+
+        # Both should have exactly 4 applications
+        assert json_app_count == 4, (
+            f"JSON has {json_app_count} applications, expected 4"
+        )
+        assert csv_app_count == 4, (
+            f"CSV has {csv_app_count} unique companies, expected 4"
+        )
+
+    async def test_json_csv_application_count_match(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ):
+        """Test that both exports have the same application count."""
+        json_response = await client.get("/api/export/json", headers=auth_headers)
+        csv_response = await client.get("/api/export/csv", headers=auth_headers)
+
+        json_data = json_response.json()
+        csv_data = csv_response.text
+
+        json_app_count = len(json_data.get("models", {}).get("Application", []))
+
+        # Count CSV data rows (not including header)
+        csv_lines = [line for line in csv_data.split("\n") if line.strip()]
+        csv_row_count = len(csv_lines) - 1  # Subtract header
+
+        # CSV may have more rows due to multiple rounds/status history per application
+        # but should have at least as many rows as applications
+        assert csv_row_count >= json_app_count
+
+    async def test_both_exports_include_all_companies(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_applications: list[Application],
+    ):
+        """Test that both exports include all companies."""
+        json_response = await client.get("/api/export/json", headers=auth_headers)
+        csv_response = await client.get("/api/export/csv", headers=auth_headers)
+
+        json_data = json_response.json()
+        csv_data = csv_response.text
+
+        # Extract companies from JSON (new format uses models.Application)
+        json_companies = {
+            app["company"] for app in json_data.get("models", {}).get("Application", [])
+        }
+
+        # Extract companies from CSV
+        csv_lines = csv_data.split("\n")
+        csv_companies = set()
+        for line in csv_lines[1:]:  # Skip header
+            if line.strip():
+                try:
+                    row = next(csv.reader(io.StringIO(line)))
+                    if row and len(row) > 0:
+                        csv_companies.add(row[0])
+                except StopIteration:
+                    continue
+
+        expected_companies = {
+            "Tech Corp",
+            "Startup Inc",
+            "Big Tech Company",
+            "Amazing Startup",
+        }
+
+        assert json_companies == expected_companies, f"JSON companies: {json_companies}"
+        assert csv_companies == expected_companies, f"CSV companies: {csv_companies}"
+
+
+class TestExportAuthentication:
+    """Test export authentication and authorization."""
+
+    async def test_export_requires_authentication(
+        self,
+        client: AsyncClient,
+    ):
+        """Test that export endpoints require authentication."""
+        json_response = await client.get("/api/export/json")
+        csv_response = await client.get("/api/export/csv")
+
+        assert json_response.status_code == 401
+        assert csv_response.status_code == 401
+
+    async def test_export_with_valid_token(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ):
+        """Test that export works with valid authentication."""
+        json_response = await client.get("/api/export/json", headers=auth_headers)
+        csv_response = await client.get("/api/export/csv", headers=auth_headers)
+
+        assert json_response.status_code == 200
+        assert csv_response.status_code == 200
+
+
+class TestExportHeaders:
+    """Test export response headers."""
+
+    async def test_json_export_content_disposition(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ):
+        """Test JSON export has correct content disposition header."""
+        response = await client.get("/api/export/json", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert "content-disposition" in response.headers
+        assert "attachment" in response.headers["content-disposition"]
+        assert "autumn-export.json" in response.headers["content-disposition"]
+
+    async def test_csv_export_content_disposition(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ):
+        """Test CSV export has correct content disposition header."""
+        response = await client.get("/api/export/csv", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert "content-disposition" in response.headers
+        assert "attachment" in response.headers["content-disposition"]
+        assert "autumn-export.csv" in response.headers["content-disposition"]
+
+    async def test_json_export_content_type(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ):
+        """Test JSON export has correct content type."""
+        response = await client.get("/api/export/json", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/json"
+
+    async def test_csv_export_content_type(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ):
+        """Test CSV export has correct content type."""
+        response = await client.get("/api/export/csv", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/csv; charset=utf-8"
+
+
+class TestExportIncludesDefaults:
+    """Test that export includes user's statuses and round types."""
+
+    async def test_json_export_includes_user_statuses(
+        self,
+        db: AsyncSession,
+        test_user: User,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ):
+        """Test that JSON export includes statuses belonging to the user."""
+        # Create a user-specific status
+        user_status = ApplicationStatus(
+            name="Test User Status",
+            color="#ff0000",
+            is_default=False,
+            user_id=test_user.id,
+            order=100,
+        )
+        db.add(user_status)
+        await db.commit()
+
+        response = await client.get("/api/export/json", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        # New format uses model name as key
+        status_names = [
+            s["name"] for s in data.get("models", {}).get("ApplicationStatus", [])
+        ]
+
+        # Should include the user's status
+        assert "Test User Status" in status_names, (
+            "Export should include user's statuses"
+        )
+
+    async def test_json_export_includes_user_round_types(
+        self,
+        db: AsyncSession,
+        test_user: User,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ):
+        """Test that JSON export includes round types belonging to the user."""
+        # Create a user-specific round type
+        user_round_type = RoundType(
+            name="Test User Round",
+            is_default=False,
+            user_id=test_user.id,
+        )
+        db.add(user_round_type)
+        await db.commit()
+
+        response = await client.get("/api/export/json", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        round_type_names = [
+            rt["name"] for rt in data.get("models", {}).get("RoundType", [])
+        ]
+
+        # Should include the user's round type
+        assert "Test User Round" in round_type_names, (
+            "Export should include user's round types"
+        )
+
+    async def test_json_export_includes_user_entities(
+        self,
+        db: AsyncSession,
+        client: AsyncClient,
+        test_user: User,
+        auth_headers: dict[str, str],
+    ):
+        """Test that JSON export includes user-specific entities."""
+        # Create user-specific status
+        user_status = ApplicationStatus(
+            name="User Custom Status",
+            color="#00ff00",
+            is_default=False,
+            user_id=test_user.id,
+            order=100,
+        )
+        db.add(user_status)
+
+        # Create user-specific round type
+        user_round_type = RoundType(
+            name="User Custom Round",
+            is_default=False,
+            user_id=test_user.id,
+        )
+        db.add(user_round_type)
+
+        await db.commit()
+
+        response = await client.get("/api/export/json", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        status_names = [
+            s["name"] for s in data.get("models", {}).get("ApplicationStatus", [])
+        ]
+        round_type_names = [
+            rt["name"] for rt in data.get("models", {}).get("RoundType", [])
+        ]
+
+        # Should include user-specific entities
+        assert "User Custom Status" in status_names, (
+            "Export should include user-specific statuses"
+        )
+        assert "User Custom Round" in round_type_names, (
+            "Export should include user-specific round types"
+        )
+
+
+class TestZIPExport:
+    """Test ZIP export functionality."""
+
+    async def test_zip_export_requires_auth(self, client: AsyncClient):
+        """Test ZIP export requires authentication."""
+        response = await client.get("/api/export/zip")
+        assert response.status_code == 401
+
+    async def test_zip_export_includes_data_json(
+        self, client: AsyncClient, auth_headers: dict[str, str]
+    ):
+        """Test ZIP export contains data.json file."""
+        response = await client.get(
+            "/api/export/zip",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        # Verify it's a valid ZIP
+        assert response.headers["content-type"] == "application/zip"
+
+        # Check ZIP contents
+        import io as zipfile_io
+        import zipfile
+
+        zip_bytes = await response.aread()
+        with zipfile.ZipFile(zipfile_io.BytesIO(zip_bytes)) as zf:
+            assert "data.json" in zf.namelist()
+
+            # Verify JSON structure (new introspective format)
+            data = json.loads(zf.read("data.json"))
+            assert "user" in data
+            assert "models" in data
+            assert "Application" in data["models"]
+
+    async def test_zip_export_filename_includes_timestamp(
+        self, client: AsyncClient, auth_headers: dict[str, str]
+    ):
+        """Test ZIP filename has timestamp."""
+        response = await client.get(
+            "/api/export/zip",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        content_disposition = response.headers.get("content-disposition", "")
+        assert "autumn-export-" in content_disposition
+        assert ".zip" in content_disposition
+
+    async def test_zip_export_uses_file_response_with_background_cleanup(
+        self, db: AsyncSession, test_user: User
+    ):
+        from app.api.export import export_zip
+
+        route_response = await export_zip(user=test_user, db=db)
+
+        assert isinstance(route_response, FileResponse)
+        assert isinstance(route_response.background, BackgroundTask)
+        assert Path(route_response.path).exists()
+
+        await route_response.background()
+
+        assert not Path(route_response.path).exists()
+
+    async def test_zip_export_resolves_relative_stored_paths_against_absolute_upload_dir(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        db: AsyncSession,
+        test_user: User,
+        test_statuses: list[ApplicationStatus],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ):
+        upload_dir = tmp_path / "absolute-uploads"
+        upload_dir.mkdir()
+        stored_filename = "deadbeef.pdf"
+        (upload_dir / stored_filename).write_bytes(b"pdf-content")
+
+        application = Application(
+            user_id=test_user.id,
+            company="Export Files Co",
+            job_title="Backend Engineer",
+            status_id=test_statuses[1].id,
+            cv_path=f"uploads/{stored_filename}",
+            applied_at=date(2024, 2, 1),
+        )
+        db.add(application)
+        await db.commit()
+
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "upload_dir", str(upload_dir))
+
+        response = await client.get("/api/export/zip", headers=auth_headers)
+        assert response.status_code == 200
+
+        with zipfile.ZipFile(io.BytesIO(response.content), "r") as zf:
+            exported_files = [name for name in zf.namelist() if name.endswith(".pdf")]
+
+            assert any("resume.pdf" in name for name in exported_files)
+            resume_path = next(name for name in exported_files if name.endswith("resume.pdf"))
+            assert zf.read(resume_path) == b"pdf-content"

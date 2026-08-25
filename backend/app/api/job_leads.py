@@ -1,0 +1,739 @@
+"""Job Leads API router.
+
+This module provides API endpoints for managing job leads, including:
+- Creating new job leads from URLs (with AI-powered extraction)
+- Listing and filtering job leads
+- Viewing job lead details
+- Converting job leads to applications
+- Deleting job leads
+
+The API supports both web app authentication (Bearer token) and
+browser extension authentication (API token).
+"""
+
+import logging
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.deps import (
+    get_current_user,
+    get_current_user_flexible,
+    get_request_time_zone,
+    require_api_key_scope,
+    require_api_key_scopes,
+)
+from app.models import User
+from app.models.application import Application
+from app.models.job_lead import JobLead
+from app.schemas.application import ApplicationListItem
+from app.schemas.errors import ErrorCode, make_error_response
+from app.schemas.job_lead import (
+    JobLeadCreate,
+    JobLeadListResponse,
+    JobLeadResponse,
+)
+from app.services.ai_settings import get_ai_settings
+from app.services.extraction import (
+    ExtractionAuthError,
+    ExtractionError,
+    ExtractionInvalidResponseError,
+    ExtractionTimeoutError,
+    NoJobFoundError,
+    extract_job_data,
+)
+from app.services.job_fetch import fetch_job_posting_html
+from app.services.reference_data import get_initial_application_status
+from app.services.user_time import get_user_local_today
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/job-leads", tags=["job-leads"])
+
+
+def _is_duplicate_job_lead_url_error(exc: IntegrityError) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    return "uq_job_leads_user_url" in message or (
+        "job_leads.user_id, job_leads.url" in message
+    )
+
+
+@router.get("", response_model=JobLeadListResponse)
+async def list_job_leads(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    status_filter: str | None = Query(None, alias="status"),
+    search: str | None = Query(None, description="Search by company, title, or URL"),
+    source: str | None = Query(None, description="Filter by exact source"),
+    sort: str = Query("newest", pattern="^(newest|oldest)$"),
+    user: User = Depends(get_current_user_flexible),
+    _: object = Depends(require_api_key_scope("job_leads:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """List job leads for the authenticated user with pagination.
+
+    Args:
+        page: Page number (1-indexed).
+        per_page: Items per page (max 100).
+        status_filter: Optional status filter (pending, extracted, failed).
+        search: Optional text search across company, title, and URL.
+        source: Optional exact source filter.
+        sort: Sort order by scraped date.
+        user: The authenticated user.
+        db: Database session.
+
+    Returns:
+        Paginated list of job leads.
+    """
+    query = select(JobLead).where(JobLead.user_id == user.id)
+
+    if status_filter:
+        query = query.where(JobLead.status == status_filter)
+
+    if source:
+        query = query.where(JobLead.source == source)
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            or_(
+                JobLead.url.ilike(search_term),
+                JobLead.company.ilike(search_term),
+                JobLead.title.ilike(search_term),
+            )
+        )
+
+    # Get total count
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    if sort == "oldest":
+        query = query.order_by(JobLead.scraped_at.asc())
+    else:
+        query = query.order_by(JobLead.scraped_at.desc())
+
+    query = query.offset((page - 1) * per_page).limit(per_page)
+
+    result = await db.execute(query)
+    job_leads = result.scalars().all()
+
+    return JobLeadListResponse(
+        items=job_leads,  # type: ignore[arg-type]
+        total=total,
+        page=page,
+        per_page=per_page,
+    )
+
+
+@router.get("/sources")
+async def list_job_lead_sources(
+    user: User = Depends(get_current_user_flexible),
+    _: object = Depends(require_api_key_scope("job_leads:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(JobLead.source)
+        .where(JobLead.user_id == user.id, JobLead.source.is_not(None))
+        .distinct()
+        .order_by(JobLead.source.asc())
+    )
+    sources = [source for source in result.scalars().all() if source]
+    return {"sources": sources}
+
+
+@router.get("/{job_lead_id}", response_model=JobLeadResponse)
+async def get_job_lead(
+    job_lead_id: str,
+    user: User = Depends(get_current_user),
+    _: object = Depends(require_api_key_scope("job_leads:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a single job lead by ID.
+
+    Args:
+        job_lead_id: The UUID of the job lead.
+        user: The authenticated user.
+        db: Database session.
+
+    Returns:
+        The job lead details.
+
+    Raises:
+        HTTPException: 404 if job lead not found or doesn't belong to user.
+    """
+    result = await db.execute(
+        select(JobLead).where(
+            JobLead.id == job_lead_id,
+            JobLead.user_id == user.id,
+        )
+    )
+    job_lead = result.scalars().first()
+
+    if not job_lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job lead not found",
+        )
+
+    return job_lead
+
+
+@router.post("", response_model=JobLeadResponse, status_code=status.HTTP_201_CREATED)
+async def create_job_lead(
+    data: JobLeadCreate,
+    user: User = Depends(get_current_user_flexible),
+    _: object = Depends(require_api_key_scope("job_leads:write")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new job lead by extracting data from a job posting URL.
+
+    This endpoint:
+    1. Fetches HTML content from the provided URL
+    2. Uses AI to extract structured job data from the HTML
+    3. Creates a JobLead record in the database
+
+    The endpoint supports both JWT bearer sessions and API-token-based auth
+    so it can be used by the web app, CLI, and browser extension.
+
+    Args:
+        data: JobLeadCreate schema with url (required) and optional html content.
+        user: The authenticated user.
+        db: Database session.
+
+    Returns:
+        The created JobLead record with extracted data.
+
+    Raises:
+        HTTPException: 400 for invalid/extraction failures, 502 for fetch failures.
+    """
+    url = data.url
+    logger.info(f"Creating job lead for URL: {url} (user: {user.id})")
+
+    # Check for existing job lead with same URL for this user
+    result = await db.execute(
+        select(JobLead).where(
+            JobLead.user_id == user.id,
+            JobLead.url == url,
+        )
+    )
+    existing = result.scalars().first()
+    if existing:
+        logger.info(
+            f"Duplicate job lead URL detected: {url} (existing ID: {existing.id})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=make_error_response(
+                ErrorCode.DUPLICATE_RESOURCE,
+                detail=f"A job lead already exists for this URL. ID: {existing.id}",
+                message_override="This job has already been saved",
+            ),
+        )
+
+    # Step 1: Get content for extraction
+    # Prefer text (direct from extension), fall back to HTML, then fetch from URL
+    if data.text:
+        logger.debug(f"Using provided text content ({len(data.text)} chars)")
+        html_content = None
+        text_content = data.text
+    elif data.html:
+        logger.debug(f"Using provided HTML content ({len(data.html)} chars)")
+        html_content = data.html
+        text_content = None
+    else:
+        html_content = await fetch_job_posting_html(url)
+        logger.debug(f"Fetched HTML content ({len(html_content)} chars)")
+        text_content = None
+
+    # Step 2: Extract job data using AI
+    # Get AI settings from database
+    ai_settings = await get_ai_settings(db)
+
+    try:
+        extracted = await extract_job_data(
+            html=html_content,
+            text=text_content,
+            url=url,
+            model=ai_settings.model,
+            api_key=ai_settings.api_key,
+            api_base=ai_settings.base_url,
+        )
+    except ExtractionAuthError as e:
+        logger.error(f"AI auth error for {url}: {e.message}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=make_error_response(
+                ErrorCode.AI_KEY_NOT_CONFIGURED,
+                detail=e.message,
+            ),
+        )
+    except ExtractionTimeoutError as e:
+        logger.error(f"Extraction timeout for {url}: {e.message}")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=make_error_response(
+                ErrorCode.AI_TIMEOUT,
+                detail=e.message,
+            ),
+        )
+    except NoJobFoundError as e:
+        logger.warning(f"No job found at {url}: {e.message}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=make_error_response(
+                ErrorCode.AI_EXTRACTION_FAILED,
+                detail=e.message,
+                message_override="Could not extract job posting data from this page",
+                action_override="Make sure the URL points to a valid job posting",
+            ),
+        )
+    except ExtractionInvalidResponseError as e:
+        logger.error(f"Invalid extraction response for {url}: {e.message}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=make_error_response(
+                ErrorCode.AI_SERVICE_ERROR,
+                detail=e.message,
+            ),
+        )
+    except ExtractionError as e:
+        logger.error(f"Extraction error for {url}: {e.message}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=make_error_response(
+                ErrorCode.AI_SERVICE_ERROR,
+                detail=e.message,
+            ),
+        )
+
+    # Step 3: Create JobLead record
+    job_lead = JobLead(
+        user_id=user.id,
+        url=url,
+        status="extracted",
+        title=extracted.title,
+        company=extracted.company,
+        description=extracted.description,
+        location=extracted.location,
+        salary_min=extracted.salary_min,
+        salary_max=extracted.salary_max,
+        salary_currency=extracted.salary_currency,
+        recruiter_name=extracted.recruiter_name,
+        recruiter_title=extracted.recruiter_title,
+        recruiter_linkedin_url=extracted.recruiter_linkedin_url,
+        requirements_must_have=extracted.requirements_must_have,
+        requirements_nice_to_have=extracted.requirements_nice_to_have,
+        skills=extracted.skills,
+        years_experience_min=extracted.years_experience_min,
+        years_experience_max=extracted.years_experience_max,
+        source=extracted.source,
+        posted_date=extracted.posted_date,
+    )
+
+    db.add(job_lead)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if _is_duplicate_job_lead_url_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=make_error_response(
+                    ErrorCode.DUPLICATE_RESOURCE,
+                    detail="A job lead already exists for this URL.",
+                    message_override="This job has already been saved",
+                ),
+            ) from exc
+        raise
+    await db.refresh(job_lead)
+
+    logger.info(
+        f"Created job lead {job_lead.id}: {job_lead.title} at {job_lead.company}"
+    )
+
+    return job_lead
+
+
+@router.post("/{job_lead_id}/retry", response_model=JobLeadResponse)
+async def retry_job_lead_extraction(
+    job_lead_id: str,
+    user: User = Depends(get_current_user),
+    _: object = Depends(require_api_key_scope("job_leads:write")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retry extraction for a failed job lead.
+
+    This endpoint:
+    1. Finds the job lead by ID and verifies it belongs to the user
+    2. Verifies the job lead has status "failed"
+    3. Re-fetches HTML content from the URL
+    4. Re-runs extraction with fresh data
+    5. Updates the job lead with new extracted data
+    6. Sets status to "extracted" on success or "failed" on error
+
+    Args:
+        job_lead_id: The UUID of the job lead to retry.
+        user: The authenticated user.
+        db: Database session.
+
+    Returns:
+        The updated JobLead record with new extraction data.
+
+    Raises:
+        HTTPException: 404 if job lead not found or doesn't belong to user,
+                     400 if job lead status is not "failed".
+    """
+    # Step 1: Find the job lead and verify it exists and belongs to user
+    result = await db.execute(
+        select(JobLead).where(
+            JobLead.id == job_lead_id,
+            JobLead.user_id == user.id,
+        )
+    )
+    job_lead = result.scalars().first()
+
+    if not job_lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job lead not found",
+        )
+
+    # Step 2: Verify the job lead has status "failed"
+    if job_lead.status != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job lead must have status 'failed' to retry",
+        )
+
+    logger.info(
+        f"Retrying extraction for job lead {job_lead_id}: {job_lead.title or 'Untitled'}"
+    )
+
+    try:
+        # Step 3: Re-fetch HTML content from the URL
+        html_content = await fetch_job_posting_html(job_lead.url)
+        logger.debug(f"Re-fetched HTML content ({len(html_content)} chars)")
+
+        # Step 4: Extract job data using AI
+        # Get AI settings from database
+        ai_settings = await get_ai_settings(db)
+
+        try:
+            extracted = await extract_job_data(
+                html=html_content,
+                url=job_lead.url,
+                model=ai_settings.model,
+                api_key=ai_settings.api_key,
+                api_base=ai_settings.base_url,
+            )
+            logger.info(
+                f"Successfully re-extracted job: {extracted.title} at {extracted.company}"
+            )
+        except ExtractionAuthError as e:
+            logger.error(f"AI auth error for {job_lead.url}: {e.message}")
+            job_lead.status = "failed"
+            job_lead.error_message = "AI API key not configured"
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=make_error_response(
+                    ErrorCode.AI_KEY_NOT_CONFIGURED,
+                    detail=e.message,
+                ),
+            )
+        except ExtractionTimeoutError as e:
+            logger.error(f"Extraction timeout for {job_lead.url}: {e.message}")
+            job_lead.status = "failed"
+            job_lead.error_message = (
+                "Job data extraction timed out. Please try again later."
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=make_error_response(
+                    ErrorCode.AI_TIMEOUT,
+                    detail=e.message,
+                ),
+            )
+        except NoJobFoundError as e:
+            logger.warning(f"No job found at {job_lead.url}: {e.message}")
+            job_lead.status = "failed"
+            job_lead.error_message = "Could not extract job posting data."
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=make_error_response(
+                    ErrorCode.AI_EXTRACTION_FAILED,
+                    detail=e.message,
+                ),
+            )
+        except ExtractionInvalidResponseError as e:
+            logger.error(f"Invalid extraction response for {job_lead.url}: {e.message}")
+            job_lead.status = "failed"
+            job_lead.error_message = "AI service error. Please try again later."
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=make_error_response(
+                    ErrorCode.AI_SERVICE_ERROR,
+                    detail=e.message,
+                ),
+            )
+        except ExtractionError as e:
+            logger.error(f"Extraction error for {job_lead.url}: {e.message}")
+            job_lead.status = "failed"
+            job_lead.error_message = f"Failed to extract job data: {e.message}"
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=make_error_response(
+                    ErrorCode.AI_SERVICE_ERROR,
+                    detail=e.message,
+                ),
+            )
+
+        # Step 5: Update job lead fields with new extraction
+        job_lead.status = "extracted"
+        job_lead.error_message = None  # Clear any previous error
+
+        # Update all fields that might have changed
+        job_lead.title = extracted.title
+        job_lead.company = extracted.company
+        job_lead.description = extracted.description
+        job_lead.location = extracted.location
+        job_lead.salary_min = extracted.salary_min
+        job_lead.salary_max = extracted.salary_max
+        job_lead.salary_currency = extracted.salary_currency
+        job_lead.recruiter_name = extracted.recruiter_name
+        job_lead.recruiter_title = extracted.recruiter_title
+        job_lead.recruiter_linkedin_url = extracted.recruiter_linkedin_url
+        job_lead.requirements_must_have = extracted.requirements_must_have
+        job_lead.requirements_nice_to_have = extracted.requirements_nice_to_have
+        job_lead.skills = extracted.skills
+        job_lead.years_experience_min = extracted.years_experience_min
+        job_lead.years_experience_max = extracted.years_experience_max
+        job_lead.source = extracted.source
+        job_lead.posted_date = extracted.posted_date
+        job_lead.scraped_at = datetime.now(UTC)  # Update timestamp
+
+        await db.commit()
+        await db.refresh(job_lead)
+
+        logger.info(
+            f"Successfully re-extracted job lead {job_lead.id}: {job_lead.title} at {job_lead.company}"
+        )
+
+        return job_lead
+
+    except HTTPException:
+        # Re-raise HTTP exceptions from fetch/extract
+        raise
+    except ValueError as e:
+        logger.error(f"Value error during retry for job lead {job_lead_id}: {e}")
+        job_lead.status = "failed"
+        job_lead.error_message = f"Retry failed: {str(e)}"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error during retry for job lead {job_lead_id}: {e}")
+        # Update job lead status to failed with error
+        job_lead.status = "failed"
+        job_lead.error_message = f"Unexpected error during retry: {str(e)}"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred during retry. Please try again.",
+        )
+
+
+@router.delete("/{job_lead_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_job_lead(
+    job_lead_id: str,
+    user: User = Depends(get_current_user),
+    _: object = Depends(require_api_key_scope("job_leads:write")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a job lead by ID.
+
+    Args:
+        job_lead_id: The UUID of the job lead to delete.
+        user: The authenticated user.
+        db: Database session.
+
+    Returns:
+        204 No Content on success.
+
+    Raises:
+        HTTPException: 404 if job lead not found or doesn't belong to user.
+    """
+    result = await db.execute(
+        select(JobLead).where(
+            JobLead.id == job_lead_id,
+            JobLead.user_id == user.id,
+        )
+    )
+    job_lead = result.scalars().first()
+
+    if not job_lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job lead not found",
+        )
+
+    await db.delete(job_lead)
+    await db.commit()
+
+
+@router.post(
+    "/{job_lead_id}/convert",
+    response_model=ApplicationListItem,
+    status_code=status.HTTP_201_CREATED,
+)
+async def convert_job_lead_to_application(
+    job_lead_id: str,
+    x_timezone: str | None = Depends(get_request_time_zone),
+    user: User = Depends(get_current_user_flexible),
+    _: object = Depends(
+        require_api_key_scopes("job_leads:write", "applications:write")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Convert a job lead to an application.
+
+    This endpoint:
+    1. Finds the job lead by ID and verifies it belongs to the user
+    2. Verifies the job lead has status "extracted" and hasn't been converted yet
+    3. Creates an Application from the job lead data
+    4. Sets job_lead_id and copies all relevant fields
+    5. Marks the job lead as converted
+
+    Args:
+        job_lead_id: The UUID of the job lead to convert.
+        user: The authenticated user.
+        db: Database session.
+
+    Returns:
+        The created Application record.
+
+    Raises:
+        HTTPException: 404 if job lead not found or doesn't belong to user,
+                     400 if job lead status is not "extracted" or already converted.
+    """
+    # Step 1: Find the job lead and verify it exists and belongs to user
+    result = await db.execute(
+        select(JobLead).where(
+            JobLead.id == job_lead_id,
+            JobLead.user_id == user.id,
+        )
+    )
+    job_lead = result.scalars().first()
+
+    if not job_lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job lead not found",
+        )
+
+    # Step 2: Verify the job lead has status "extracted" and hasn't been converted yet
+    if job_lead.status != "extracted":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job lead must have status 'extracted' to convert",
+        )
+
+    if job_lead.converted_to_application_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job lead has already been converted to an application",
+        )
+
+    logger.info(
+        f"Converting job lead {job_lead_id} to application: {job_lead.title} at {job_lead.company}"
+    )
+
+    # Step 3: Resolve the initial application status visible to this user.
+    default_status = await get_initial_application_status(db, user.id)
+
+    if not default_status:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No application status found. Please create at least one status.",
+        )
+
+    # Step 4: Create an Application from the job lead data
+    application = Application(
+        user_id=user.id,
+        company=job_lead.company,
+        job_title=job_lead.title,
+        job_description=job_lead.description,
+        job_url=job_lead.url,
+        job_lead_id=job_lead.id,
+        status_id=default_status.id,
+        applied_at=get_user_local_today(user, x_timezone=x_timezone),
+        # Rich extraction fields
+        location=job_lead.location,
+        salary_min=job_lead.salary_min,
+        salary_max=job_lead.salary_max,
+        salary_currency=job_lead.salary_currency,
+        recruiter_name=job_lead.recruiter_name,
+        recruiter_title=job_lead.recruiter_title,
+        recruiter_linkedin_url=job_lead.recruiter_linkedin_url,
+        requirements_must_have=job_lead.requirements_must_have or [],
+        requirements_nice_to_have=job_lead.requirements_nice_to_have or [],
+        skills=job_lead.skills or [],
+        years_experience_min=job_lead.years_experience_min,
+        years_experience_max=job_lead.years_experience_max,
+        source=job_lead.source,
+    )
+
+    db.add(application)
+
+    # Flush to get the application ID before creating history
+    await db.flush()
+
+    # Seed initial status history for Sankey chart
+    from app.models import ApplicationStatusHistory
+
+    history_entry = ApplicationStatusHistory(
+        application_id=application.id,
+        from_status_id=None,
+        to_status_id=default_status.id,
+        changed_at=datetime.now(UTC),
+    )
+    db.add(history_entry)
+
+    # Step 5: Mark the lead as converted and link the created application.
+    # Keep the lead for traceability and to allow the UI to link back to it.
+    job_lead.status = "converted"
+    job_lead.converted_to_application_id = application.id
+
+    await db.commit()
+
+    # Eagerly load the status relationship before returning
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(Application)
+        .options(selectinload(Application.status))
+        .where(Application.id == application.id)
+    )
+    application = result.scalars().first()
+    if application is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve created application",
+        )
+
+    logger.info(
+        f"Successfully converted job lead to application {application.id}: {application.job_title} at {application.company}"
+    )
+
+    return application

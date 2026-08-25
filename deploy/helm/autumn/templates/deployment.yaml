@@ -1,0 +1,186 @@
+{{/* Validate replica/storage combinations */}}
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.postgresql.enabled) }}
+{{- fail "Multiple replicas require postgresql.enabled=true (SQLite does not support concurrent writes)" }}
+{{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.persistence.enabled) }}
+{{- fail "Multiple replicas require persistence.enabled=true because uploads must live on shared storage" }}
+{{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.persistence.existingClaim) (ne .Values.persistence.accessMode "ReadWriteMany") }}
+{{- fail "Multiple replicas require shared upload storage. Use persistence.accessMode=ReadWriteMany or provide persistence.existingClaim backed by shared storage." }}
+{{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) .Values.persistence.existingClaim (not .Values.persistence.sharedAccess) }}
+{{- fail "Multiple replicas with persistence.existingClaim require persistence.sharedAccess=true to acknowledge the claim supports shared read-write access." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "autumn.fullname" . }}
+  labels:
+    {{- include "autumn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "autumn.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- include "autumn.deploymentStrategy" . | nindent 4 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "autumn.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "autumn.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          env:
+            # PATH is required for venv binaries (Kubernetes doesn't inherit Docker ENV)
+            - name: PATH
+              value: "/app/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+            {{- if .Values.postgresql.enabled }}
+            # Discrete PostgreSQL settings - app constructs URL with proper encoding
+            - name: POSTGRES_HOST
+              value: {{ .Values.postgresql.host | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.postgresql.port | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.database | quote }}
+            {{- if .Values.postgresql.existingSecret }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret }}
+                  key: {{ .Values.postgresql.existingSecretPasswordKey }}
+            {{- else if .Values.postgresql.password }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.postgresql.password | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.secretKey.existingSecret }}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretKey.existingSecret }}
+                  key: {{ .Values.secretKey.existingSecretKey }}
+            {{- end }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.initContainer.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 5577
+              protocol: TCP
+          env:
+            # PATH is required for venv binaries (Kubernetes doesn't inherit Docker ENV)
+            - name: PATH
+              value: "/app/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+            {{- if .Values.postgresql.enabled }}
+            # Discrete PostgreSQL settings - app constructs URL with proper encoding
+            - name: POSTGRES_HOST
+              value: {{ .Values.postgresql.host | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.postgresql.port | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.database | quote }}
+            {{- if .Values.postgresql.existingSecret }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret }}
+                  key: {{ .Values.postgresql.existingSecretPasswordKey }}
+            {{- else if .Values.postgresql.password }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.postgresql.password | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.secretKey.existingSecret }}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretKey.existingSecret }}
+                  key: {{ .Values.secretKey.existingSecretKey }}
+            {{- end }}
+            - name: UPLOAD_DIR
+              value: /app/data/uploads
+            {{- if .Values.ingress.enabled }}
+            - name: APP_URL
+              value: {{ if .Values.ingress.tls.enabled }}"https://{{ .Values.ingress.host }}"{{ else }}"http://{{ .Values.ingress.host }}"{{ end }}
+            {{- end }}
+            {{- if .Values.trustedHosts }}
+            - name: TRUSTED_HOSTS
+              value: {{ join "," .Values.trustedHosts | quote }}
+            {{- end }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          {{- if and .Values.persistence.enabled .Values.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim }}
+          {{- else if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "autumn.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

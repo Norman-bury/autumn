@@ -1,0 +1,42 @@
+/* Dracula Theme */
+[data-theme='dracula'] {
+  /* Backgrounds - expanded layers for better contrast */
+  --bg0-hard: #1e1f29;
+  --bg0: #282a36;
+  --bg0-soft: #333344;
+  --bg1: #44475a;
+  --bg2: #525a7d;
+  --bg3: #5a6285;
+  --bg4: #6272a4;
+  --bg-h: #6f7a9e;
+
+  /* Foregrounds - expanded layers */
+  --fg0: #ffffff;
+  --fg1: #f8f8f2;
+  --fg2: #e4e4dc;
+  --fg3: #d0d0c8;
+  --fg4: #6272a4;
+  --gray: #6272a4;
+
+  /* Accent colors - base */
+  --red: #ff5555;
+  --green: #50fa7b;
+  --yellow: #f1fa8c;
+  --blue: #8be9fd;
+  --purple: #bd93f9;
+  --aqua: #8be9fd;
+  --orange: #ffb86c;
+
+  /* Accent colors - bright (generated with color-mix) */
+  --red-bright: color-mix(in srgb, var(--red), white 15%);
+  --green-bright: color-mix(in srgb, var(--green), white 15%);
+  --yellow-bright: color-mix(in srgb, var(--yellow), white 15%);
+  --blue-bright: color-mix(in srgb, var(--blue), white 15%);
+  --purple-bright: color-mix(in srgb, var(--purple), white 15%);
+  --aqua-bright: color-mix(in srgb, var(--aqua), white 15%);
+  --orange-bright: color-mix(in srgb, var(--orange), white 15%);
+
+  /* Configurable accent - defaults to aqua */
+  --accent: var(--aqua);
+  --accent-bright: var(--aqua-bright);
+}

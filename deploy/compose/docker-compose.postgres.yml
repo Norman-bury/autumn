@@ -1,0 +1,34 @@
+services:
+  app:
+    image: ${AUTUMN_IMAGE:-ghcr.io/Norman-bury/autumn:latest}
+    ports:
+      - "${APP_PORT:-5577}:5577"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=autumn
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_DB=autumn
+      - APP_URL=${APP_URL:-http://localhost:5577}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=autumn
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_DB=autumn
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    restart: unless-stopped

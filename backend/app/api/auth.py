@@ -1,0 +1,198 @@
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.core.database import get_db
+from app.core.deps import AuthContext, get_current_auth_context, get_current_user_jwt
+from app.core.rate_limit import limiter
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    get_password_hash,
+    verify_password,
+)
+from app.models import User
+from app.schemas.api_keys import UserAPIKeyResponse
+from app.schemas.auth import (
+    AuthWhoAmIResponse,
+    Token,
+    TokenRefresh,
+    UserCreate,
+    UserLogin,
+    UserResponse,
+)
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+settings = get_settings()
+
+
+@router.post("/local-session", response_model=Token)
+async def create_local_session(db: AsyncSession = Depends(get_db)) -> Token:
+    if not settings.single_user_mode:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Local single-user mode is disabled",
+        )
+
+    result = await db.execute(
+        select(User).where(User.is_active.is_(True)).order_by(User.created_at.asc())
+    )
+    user = result.scalars().first()
+    if user is None:
+        user = User(
+            email="local@autumn-tracker.local",
+            password_hash=get_password_hash(secrets.token_urlsafe(32)),
+            is_admin=True,
+            is_active=True,
+        )
+        db.add(user)
+        try:
+            await db.commit()
+            await db.refresh(user)
+        except IntegrityError:
+            await db.rollback()
+            result = await db.execute(
+                select(User).where(User.email == "local@autumn-tracker.local")
+            )
+            user = result.scalar_one()
+
+    return Token(
+        access_token=create_access_token({"sub": user.id}),
+        refresh_token=create_refresh_token({"sub": user.id}),
+    )
+
+
+@router.post(
+    "/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED
+)
+@limiter.limit("5/hour")
+async def register(
+    request: Request,
+    user_data: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    needs_setup: bool = False,
+):
+    # Prevent abuse: if needs_setup=true but users exist, reject
+    if needs_setup:
+        result = await db.execute(select(User))
+        if result.scalars().first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Setup already completed",
+            )
+
+    result = await db.execute(select(User).where(User.email == user_data.email))
+    if result.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+
+    result = await db.execute(select(User))
+    is_first_user = result.scalars().first() is None
+    is_admin_email = settings.admin_email and user_data.email == settings.admin_email
+
+    user = User(
+        email=user_data.email,
+        password_hash=get_password_hash(user_data.password),
+        is_admin=is_first_user or is_admin_email,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    return user
+
+
+@router.post("/login", response_model=Token)
+@limiter.limit("10/minute")
+async def login(
+    request: Request, credentials: UserLogin, db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(User).where(User.email == credentials.email))
+    user = result.scalars().first()
+
+    if not user or not verify_password(credentials.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled",
+        )
+
+    return Token(
+        access_token=create_access_token({"sub": user.id}),
+        refresh_token=create_refresh_token({"sub": user.id}),
+    )
+
+
+@router.post("/refresh", response_model=Token)
+@limiter.limit("20/minute")
+async def refresh_token(
+    request: Request, token_data: TokenRefresh, db: AsyncSession = Depends(get_db)
+):
+    payload = decode_token(token_data.refresh_token)
+
+    if not payload or payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        )
+
+    user_id = payload.get("sub")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalars().first()
+
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or disabled",
+        )
+
+    return Token(
+        access_token=create_access_token({"sub": user.id}),
+        refresh_token=create_refresh_token({"sub": user.id}),
+    )
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_me(user: User = Depends(get_current_user_jwt)):
+    return user
+
+
+@router.get("/whoami", response_model=AuthWhoAmIResponse)
+async def get_whoami(
+    auth: AuthContext = Depends(get_current_auth_context),
+) -> AuthWhoAmIResponse:
+    return AuthWhoAmIResponse(
+        id=auth.user.id,
+        email=auth.user.email,
+        is_admin=auth.user.is_admin,
+        is_active=auth.user.is_active,
+        auth_method="api_key" if auth.auth_method == "api_key" else "jwt",
+        api_key=(
+            UserAPIKeyResponse.model_validate(auth.api_key)
+            if auth.api_key is not None
+            else None
+        ),
+    )
+
+
+@router.get("/setup-status")
+async def setup_status(db: AsyncSession = Depends(get_db)):
+    """Check if the application needs initial setup (no users exist)."""
+    result = await db.execute(select(User))
+    has_users = result.scalars().first() is not None
+    return {
+        "needs_setup": not has_users and not settings.single_user_mode,
+        "single_user_mode": settings.single_user_mode,
+    }

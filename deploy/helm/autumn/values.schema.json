@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Autumn Helm values",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of Autumn replicas. SQLite deployments must remain single-replica. Multiple replicas require PostgreSQL plus shared uploads storage."
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Container image settings for the Autumn application and migration init container.",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Container image repository to deploy."
+        },
+        "tag": {
+          "type": "string",
+          "description": "Container image tag. If empty, the chart appVersion is used."
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"],
+          "description": "Kubernetes image pull policy for the Autumn image."
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "description": "List of image pull secrets to attach to the Autumn pod."
+    },
+    "nameOverride": {
+      "type": "string",
+      "description": "Partial override for the generated chart name."
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "description": "Full override for the generated release name."
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "ServiceAccount configuration for the Autumn workload.",
+      "properties": {
+        "create": {
+          "type": "boolean",
+          "description": "Create a dedicated ServiceAccount for Autumn."
+        },
+        "automount": {
+          "type": "boolean",
+          "description": "Mount Kubernetes API credentials into the pod. Leave false unless Autumn must call the Kubernetes API."
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Annotations applied to the ServiceAccount."
+        },
+        "name": {
+          "type": "string",
+          "description": "Existing ServiceAccount name to use instead of creating one."
+        }
+      }
+    },
+    "podAnnotations": {
+      "type": "object",
+      "description": "Annotations applied to the Autumn pod template."
+    },
+    "podLabels": {
+      "type": "object",
+      "description": "Additional labels applied to the Autumn pod template."
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "description": "Pod security context for the Autumn workload."
+    },
+    "securityContext": {
+      "type": "object",
+      "description": "Container security context for the Autumn app and migration init container."
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Service exposure settings for Autumn.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer", "ExternalName"],
+          "description": "Kubernetes Service type used to expose Autumn."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Service port exposed by Autumn."
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Ingress configuration for exposing Autumn at a hostname.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable an Ingress resource for Autumn."
+        },
+        "className": {
+          "type": "string",
+          "description": "IngressClass name, such as nginx or traefik."
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Annotations added to the Ingress resource."
+        },
+        "host": {
+          "type": "string",
+          "description": "Primary hostname for Autumn when ingress is enabled."
+        },
+        "paths": {
+          "type": "array",
+          "description": "Ingress path rules to expose Autumn."
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "TLS settings for the Autumn Ingress.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable TLS for the Autumn Ingress."
+            },
+            "secretName": {
+              "type": "string",
+              "description": "TLS secret name used by the Ingress."
+            }
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Persistent storage for Autumn uploads and local app data.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable persistent storage for Autumn data."
+        },
+        "storageClass": {
+          "type": "string",
+          "description": "StorageClass used for the chart-managed PVC. Leave empty to use the cluster default."
+        },
+        "size": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Requested size for the chart-managed PVC."
+        },
+        "accessMode": {
+          "type": "string",
+          "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"],
+          "description": "Access mode for the chart-managed PVC. Multiple replicas require shared write access."
+        },
+        "existingClaim": {
+          "type": "string",
+          "description": "Existing PVC to use instead of creating a new one."
+        },
+        "sharedAccess": {
+          "type": "boolean",
+          "description": "Acknowledgement flag required when multiple replicas use an existing shared claim."
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Annotations applied to the chart-managed PVC."
+        }
+      }
+    },
+    "postgresql": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "External PostgreSQL settings. Enabling this switches Autumn away from SQLite.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable PostgreSQL mode for Autumn."
+        },
+        "host": {
+          "type": "string",
+          "description": "Hostname of the PostgreSQL server."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port of the PostgreSQL server."
+        },
+        "database": {
+          "type": "string",
+          "description": "PostgreSQL database name used by Autumn."
+        },
+        "user": {
+          "type": "string",
+          "description": "PostgreSQL username used by Autumn."
+        },
+        "password": {
+          "type": "string",
+          "description": "PostgreSQL password used when existingSecret is not set."
+        },
+        "existingSecret": {
+          "type": "string",
+          "description": "Existing Kubernetes Secret containing the PostgreSQL password."
+        },
+        "existingSecretPasswordKey": {
+          "type": "string",
+          "description": "Secret key name that stores the PostgreSQL password."
+        }
+      }
+    },
+    "secretKey": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "SECRET_KEY configuration used for Autumn JWT signing.",
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "description": "Existing Kubernetes Secret containing the Autumn SECRET_KEY."
+        },
+        "existingSecretKey": {
+          "type": "string",
+          "description": "Secret key name that stores the Autumn SECRET_KEY value."
+        }
+      }
+    },
+    "env": {
+      "type": "array",
+      "description": "Additional environment variables added directly to the Autumn containers."
+    },
+    "trustedHosts": {
+      "type": "array",
+      "description": "Extra hostnames appended to Autumn TrustedHostMiddleware configuration.",
+      "items": {"type": "string"}
+    },
+    "envFrom": {
+      "type": "array",
+      "description": "Additional environment-variable sources imported from ConfigMaps or Secrets."
+    },
+    "resources": {
+      "type": "object",
+      "description": "Resource requests and limits for the Autumn app container."
+    },
+    "initContainer": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Configuration for the migration init container that runs database migrations before Autumn starts.",
+      "properties": {
+        "resources": {
+          "type": "object",
+          "description": "Resource requests and limits for the migration init container."
+        }
+      }
+    },
+    "livenessProbe": {
+      "type": "object",
+      "description": "Liveness probe for the Autumn app container."
+    },
+    "readinessProbe": {
+      "type": "object",
+      "description": "Readiness probe for the Autumn app container."
+    },
+    "startupProbe": {
+      "type": "object",
+      "description": "Startup probe for the Autumn app container."
+    },
+    "nodeSelector": {
+      "type": "object",
+      "description": "Node selector for scheduling Autumn pods."
+    },
+    "tolerations": {
+      "type": "array",
+      "description": "Tolerations applied to Autumn pods."
+    },
+    "affinity": {
+      "type": "object",
+      "description": "Affinity and anti-affinity rules for Autumn pods."
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional CronJob that runs upload cleanup for orphaned CAS blobs.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the upload cleanup CronJob."
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cron schedule used for the upload cleanup job."
+        },
+        "timeZone": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Time zone used by the cleanup CronJob. Requires Kubernetes support for the CronJob timeZone field."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["dry-run", "delete"],
+          "description": "Cleanup mode. dry-run reports orphaned uploads; delete removes them."
+        },
+        "successfulJobsHistoryLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of successful cleanup Jobs to keep in Kubernetes history."
+        },
+        "failedJobsHistoryLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of failed cleanup Jobs to keep in Kubernetes history."
+        },
+        "startingDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How long Kubernetes may delay a missed cleanup Job start before skipping it."
+        },
+        "resources": {
+          "type": "object",
+          "description": "Resource requests and limits for the cleanup CronJob container."
+        }
+      }
+    }
+  }
+}

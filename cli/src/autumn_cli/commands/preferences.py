@@ -1,0 +1,47 @@
+from pathlib import Path
+
+import typer
+from pydantic import BaseModel
+
+from autumn_cli.client import CLIError
+from autumn_cli.input import load_model_body
+from autumn_cli.output import emit_result, exit_for_error
+from autumn_cli.state import get_state
+
+
+class PreferencesUpdate(BaseModel):
+    show_streak_stats: bool | None = None
+    show_needs_attention: bool | None = None
+    show_heatmap: bool | None = None
+    time_zone_mode: str | None = None
+    time_zone: str | None = None
+
+
+app = typer.Typer(help="Manage dashboard user preferences.")
+
+
+@app.command("get")
+def get_preferences(ctx: typer.Context) -> None:
+    state = get_state(ctx)
+    try:
+        payload = state.build_client().get_json("/api/user-preferences")
+        emit_result(state, payload)
+    except CLIError as exc:
+        exit_for_error(state, exc)
+
+
+@app.command("update")
+def update_preferences(
+    ctx: typer.Context,
+    body_file: Path = typer.Option(..., "--body-file", exists=True),
+) -> None:
+    state = get_state(ctx)
+    body = load_model_body(body_file, PreferencesUpdate)
+    try:
+        payload = state.build_client().patch_json(
+            "/api/user-preferences",
+            body=body,
+        )
+        emit_result(state, payload)
+    except CLIError as exc:
+        exit_for_error(state, exc)

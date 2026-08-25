@@ -1,0 +1,72 @@
+version: 2
+
+updates:
+  # Backend Python dependencies (uv ecosystem)
+  - package-ecosystem: "uv"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      backend-deps:
+        patterns: ["*"]
+    # Major versions will create PRs but require manual review
+    # (auto-merge workflow only auto-approves patches/minors)
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "backend"
+    commit-message:
+      prefix: "deps"
+
+  # Frontend JavaScript dependencies
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      frontend-deps:
+        patterns: ["*"]
+    # Major versions will create PRs but require manual review
+    # (auto-merge workflow only auto-approves patches/minors)
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "frontend"
+    commit-message:
+      prefix: "deps"
+
+  # Extension JavaScript dependencies
+  - package-ecosystem: "npm"
+    directory: "/extension"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      extension-deps:
+        patterns: ["*"]
+    # Major versions will create PRs but require manual review
+    # (auto-merge workflow only auto-approves patches/minors)
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "extension"
+    commit-message:
+      prefix: "deps"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    # Major versions will create PRs but require manual review
+    # (auto-merge workflow only auto-approves patches/minors)
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"

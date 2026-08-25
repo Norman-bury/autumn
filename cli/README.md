@@ -1,0 +1,112 @@
+# Autumn CLI
+
+Agent-first command-line interface for Autumn.
+
+**Documentation:** https://Norman-bury.github.io/autumn/
+
+For the user-facing CLI guide, see:
+- https://Norman-bury.github.io/autumn/how-to/use-the-cli/
+
+## Install
+
+Recommended install path:
+
+```bash
+uv tool install autumn-cli
+```
+
+Homebrew convenience path:
+
+```bash
+brew tap Norman-bury/tap
+brew install autumn-cli
+```
+
+For local release verification only:
+
+```bash
+uv tool install ./dist/autumn_cli-<version>-py3-none-any.whl
+```
+
+## Authentication
+
+Autumn CLI is API-key-first.
+
+1. Create or rotate the API key in the Autumn web app.
+2. Prefer the **CLI** preset so the key includes the scopes the CLI expects.
+3. Validate and store the key locally:
+
+```bash
+autumn auth init --api-key '...'
+```
+
+4. Run the auth doctor to confirm the stored key, live auth check, and required
+   CLI scopes all pass:
+
+```bash
+autumn auth doctor
+autumn auth whoami
+```
+
+5. Clear the locally stored key when needed:
+
+```bash
+autumn auth api-key clear
+```
+
+The web app remains the source of truth for API keys. The CLI does **not**
+create, rotate, revoke, or otherwise manage remote API keys.
+
+## Development
+
+```bash
+cd cli
+uv sync
+uv run autumn --help
+uv run pytest -q
+```
+
+## Release
+
+The repository release workflow builds CLI distributions, uploads them to the
+GitHub release, and publishes the CLI to PyPI by default. Homebrew tap updates
+run in the separate `homebrew-tap.yml` workflow after Homebrew's 24-hour PyPI
+resource-resolution cooldown window has elapsed.
+
+### One-Time PyPI Trusted Publishing Setup
+
+1. Create the `autumn-cli` project on PyPI.
+2. In the PyPI project settings, add a Trusted Publisher for this GitHub repository.
+3. Use these values:
+   - Owner: `Norman-bury`
+   - Repository: `autumn`
+   - Workflow name: `release.yml`
+   - Environment name: `pypi`
+
+### One-Time Homebrew Tap Automation Setup
+
+1. Create a write-enabled deploy key for `Norman-bury/homebrew-tap`.
+2. Add the private key to this repository as the `HOMEBREW_TAP_DEPLOY_KEY` secret.
+3. The dedicated `homebrew-tap.yml` workflow will:
+   - wait until the target PyPI release is older than Homebrew's 24-hour Python resource cooldown window
+   - update `Formula/autumn-cli.rb` from PyPI metadata
+   - refresh Python resource blocks with `brew update-python-resources`
+   - build the formula from source and run `brew test autumn-cli`
+   - push the tap update to `Norman-bury/homebrew-tap`
+
+Why separate from the main release workflow?
+
+- Homebrew's Python dependency resolver intentionally excludes PyPI uploads from the last 24 hours when refreshing resource blocks.
+- Keeping tap sync separate avoids false-negative release failures while still following Homebrew's documented Python-formula workflow.
+
+### Release Outputs
+
+`release.yml` publishes:
+
+- `cli/dist/*.whl`
+- `cli/dist/*.tar.gz`
+
+to the GitHub release and publishes the package to PyPI.
+
+`homebrew-tap.yml` then updates the Homebrew tap separately once the published
+sdist is old enough for `brew update-python-resources` to resolve safely.

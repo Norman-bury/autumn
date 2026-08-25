@@ -1,0 +1,1966 @@
+"""Comprehensive API endpoint tests for Task 8.4.
+
+Tests for:
+- Job Leads API (POST, GET, DELETE, retry)
+- User Profile API (GET, PUT)
+- Settings API (api-key endpoints)
+- Admin AI Settings API (GET, PUT)
+
+All tests verify authentication requirements and success/error cases.
+"""
+
+# pyright: reportCallIssue=warning
+# Pydantic v2 optional fields cause false positives with pyright
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.security import (
+    create_access_token,
+    generate_api_token,
+    get_password_hash,
+    hash_api_key,
+)
+from app.main import app
+from app.models import (
+    Application,
+    ApplicationStatus,
+    JobLead,
+    Round,
+    RoundType,
+    SystemSettings,
+    User,
+    UserAPIKey,
+)
+from app.models.user_profile import UserProfile
+from app.services.ai_settings import AISettingsState
+
+# ============================================================================
+# Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+async def test_user(db: AsyncSession) -> User:
+    """Create a regular test user."""
+    user = User(
+        email="test@example.com",
+        password_hash=get_password_hash("testpass123"),
+        is_admin=False,
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@pytest.fixture
+async def admin_user(db: AsyncSession) -> User:
+    """Create an admin test user."""
+    user = User(
+        email="admin@example.com",
+        password_hash=get_password_hash("adminpass123"),
+        is_admin=True,
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@pytest.fixture
+async def user_with_api_token(db: AsyncSession) -> User:
+    """Create a user with an API token set."""
+    raw_api_key = generate_api_token()
+    user = User(
+        email="api_user@example.com",
+        password_hash=get_password_hash("testpass123"),
+        is_admin=False,
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    db.add(
+        UserAPIKey(
+            user_id=user.id,
+            label="Test API Key",
+            key_prefix=raw_api_key[:8],
+            key_hash=hash_api_key(raw_api_key),
+        )
+    )
+    await db.commit()
+    user.api_token = raw_api_key  # test convenience attribute
+    return user
+
+
+@pytest.fixture
+def auth_headers(test_user: User) -> dict[str, str]:
+    """Create Bearer token auth headers for a regular user."""
+    token = create_access_token({"sub": test_user.id})
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def admin_auth_headers(admin_user: User) -> dict[str, str]:
+    """Create Bearer token auth headers for an admin user."""
+    token = create_access_token({"sub": admin_user.id})
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+async def test_job_lead(db: AsyncSession, test_user: User) -> JobLead:
+    """Create a test job lead."""
+    job_lead = JobLead(
+        user_id=test_user.id,
+        url="https://example.com/job/test-123",
+        status="extracted",
+        title="Software Engineer",
+        company="Test Company",
+        location="Remote",
+        salary_min=100000,
+        salary_max=150000,
+        salary_currency="USD",
+    )
+    db.add(job_lead)
+    await db.commit()
+    await db.refresh(job_lead)
+    return job_lead
+
+
+@pytest.fixture
+async def failed_job_lead(db: AsyncSession, test_user: User) -> JobLead:
+    """Create a failed job lead for retry testing."""
+    job_lead = JobLead(
+        user_id=test_user.id,
+        url="https://example.com/job/failed-456",
+        status="failed",
+        error_message="Extraction failed",
+    )
+    db.add(job_lead)
+    await db.commit()
+    await db.refresh(job_lead)
+    return job_lead
+
+
+# ============================================================================
+# Job Leads API Tests
+# ============================================================================
+
+
+class TestJobLeadsList:
+    """Tests for GET /api/job-leads endpoint."""
+
+    async def test_list_job_leads_unauthenticated(self, client: AsyncClient):
+        """Test that listing job leads requires authentication."""
+        response = await client.get("/api/job-leads")
+        assert response.status_code == 401
+
+    async def test_list_job_leads_authenticated(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_job_lead: JobLead,
+    ):
+        """Test listing job leads with valid authentication."""
+        response = await client.get("/api/job-leads", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "items" in data
+        assert "total" in data
+        assert "page" in data
+        assert "per_page" in data
+        assert data["total"] >= 1
+
+    async def test_list_job_leads_pagination(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        """Test pagination parameters for job leads list."""
+        # Create multiple job leads
+        for i in range(5):
+            lead = JobLead(
+                user_id=test_user.id,
+                url=f"https://example.com/job/pagination-{i}",
+                status="extracted",
+            )
+            db.add(lead)
+        await db.commit()
+
+        # Test pagination
+        response = await client.get(
+            "/api/job-leads?page=1&per_page=3",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["page"] == 1
+        assert data["per_page"] == 3
+        assert len(data["items"]) <= 3
+
+    async def test_list_job_leads_status_filter(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        """Test filtering job leads by status."""
+        # Create leads with different statuses
+        lead1 = JobLead(
+            user_id=test_user.id,
+            url="https://example.com/job/filter-extracted",
+            status="extracted",
+        )
+        lead2 = JobLead(
+            user_id=test_user.id,
+            url="https://example.com/job/filter-failed",
+            status="failed",
+        )
+        db.add_all([lead1, lead2])
+        await db.commit()
+
+        # Filter by extracted status
+        response = await client.get(
+            "/api/job-leads?status=extracted",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        for item in data["items"]:
+            assert item["status"] == "extracted"
+
+    async def test_list_job_leads_source_filter(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        lead1 = JobLead(
+            user_id=test_user.id,
+            url="https://linkedin.com/jobs/source-filter-1",
+            status="extracted",
+            source="LinkedIn",
+        )
+        lead2 = JobLead(
+            user_id=test_user.id,
+            url="https://indeed.com/jobs/source-filter-2",
+            status="extracted",
+            source="Indeed",
+        )
+        db.add_all([lead1, lead2])
+        await db.commit()
+
+        response = await client.get(
+            "/api/job-leads?source=LinkedIn",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert len(data["items"]) == 1
+        assert data["items"][0]["source"] == "LinkedIn"
+
+
+class TestJobLeadSources:
+    async def test_list_job_lead_sources_returns_distinct_values(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        db.add_all(
+            [
+                JobLead(
+                    user_id=test_user.id,
+                    url="https://linkedin.com/jobs/source-1",
+                    status="extracted",
+                    source="LinkedIn",
+                ),
+                JobLead(
+                    user_id=test_user.id,
+                    url="https://linkedin.com/jobs/source-2",
+                    status="extracted",
+                    source="LinkedIn",
+                ),
+                JobLead(
+                    user_id=test_user.id,
+                    url="https://indeed.com/jobs/source-3",
+                    status="extracted",
+                    source="Indeed",
+                ),
+            ]
+        )
+        await db.commit()
+
+        response = await client.get("/api/job-leads/sources", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.json()["sources"] == ["Indeed", "LinkedIn"]
+
+    async def test_list_job_leads_search_matches_company_and_title(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        lead1 = JobLead(
+            user_id=test_user.id,
+            url="https://example.com/jobs/search-company",
+            status="extracted",
+            title="Platform Engineer",
+            company="Acme Robotics",
+        )
+        lead2 = JobLead(
+            user_id=test_user.id,
+            url="https://example.com/jobs/search-other",
+            status="extracted",
+            title="Designer",
+            company="Other Company",
+        )
+        db.add_all([lead1, lead2])
+        await db.commit()
+
+        response = await client.get(
+            "/api/job-leads?search=Acme",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert len(data["items"]) == 1
+        assert data["items"][0]["company"] == "Acme Robotics"
+
+    async def test_list_job_leads_sort_oldest_first(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        lead1 = JobLead(
+            user_id=test_user.id,
+            url="https://example.com/jobs/sort-oldest",
+            status="extracted",
+            title="Oldest",
+        )
+        lead2 = JobLead(
+            user_id=test_user.id,
+            url="https://example.com/jobs/sort-newest",
+            status="extracted",
+            title="Newest",
+        )
+        db.add_all([lead1, lead2])
+        await db.commit()
+
+        response = await client.get(
+            "/api/job-leads?sort=oldest",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        titles = [item["title"] for item in data["items"]]
+        assert titles.index("Oldest") < titles.index("Newest")
+
+
+class TestApplicationsList:
+    """Tests for GET /api/applications endpoint."""
+
+    async def test_list_applications_source_filter(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        status = ApplicationStatus(
+            name="Applied",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=1,
+        )
+        db.add(status)
+        await db.commit()
+        await db.refresh(status)
+
+        app1 = Application(
+            user_id=test_user.id,
+            company="One",
+            job_title="Engineer",
+            status_id=status.id,
+            source="LinkedIn",
+        )
+        app2 = Application(
+            user_id=test_user.id,
+            company="Two",
+            job_title="Engineer",
+            status_id=status.id,
+            source="Indeed",
+        )
+        db.add_all([app1, app2])
+        await db.commit()
+
+        response = await client.get(
+            "/api/applications?source=LinkedIn",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert len(data["items"]) == 1
+        assert data["items"][0]["source"] == "LinkedIn"
+
+
+class TestApplicationSources:
+    async def test_list_application_sources_returns_distinct_values(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        status = ApplicationStatus(
+            name="Applied",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=1,
+        )
+        db.add(status)
+        await db.commit()
+        await db.refresh(status)
+
+        db.add_all(
+            [
+                Application(
+                    user_id=test_user.id,
+                    company="One",
+                    job_title="Engineer",
+                    status_id=status.id,
+                    source="LinkedIn",
+                ),
+                Application(
+                    user_id=test_user.id,
+                    company="Two",
+                    job_title="Engineer",
+                    status_id=status.id,
+                    source="LinkedIn",
+                ),
+                Application(
+                    user_id=test_user.id,
+                    company="Three",
+                    job_title="Engineer",
+                    status_id=status.id,
+                    source="Indeed",
+                ),
+            ]
+        )
+        await db.commit()
+
+        response = await client.get("/api/applications/sources", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.json()["sources"] == ["Indeed", "LinkedIn"]
+
+
+class TestApplicationsWrite:
+    async def test_create_application_persists_rich_fields(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        status = ApplicationStatus(
+            name="Applied",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=1,
+        )
+        db.add(status)
+        await db.commit()
+        await db.refresh(status)
+
+        response = await client.post(
+            "/api/applications",
+            headers=auth_headers,
+            json={
+                "company": "Rich Fields Co",
+                "job_title": "Staff Engineer",
+                "job_description": "Primary description",
+                "status_id": status.id,
+                "location": "Remote",
+                "recruiter_title": "Senior Recruiter",
+                "skills": ["Python", "FastAPI"],
+                "years_experience_min": 5,
+                "years_experience_max": 8,
+                "source": "LinkedIn",
+            },
+        )
+        assert response.status_code == 201
+
+        data = response.json()
+        assert data["location"] == "Remote"
+        assert data["recruiter_title"] == "Senior Recruiter"
+        assert data["skills"] == ["Python", "FastAPI"]
+        assert data["years_experience_min"] == 5
+        assert data["years_experience_max"] == 8
+
+    async def test_update_application_persists_rich_fields(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+    ):
+        status = ApplicationStatus(
+            name="Applied",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=1,
+        )
+        db.add(status)
+        await db.commit()
+        await db.refresh(status)
+
+        application = Application(
+            user_id=test_user.id,
+            company="Update Co",
+            job_title="Engineer",
+            status_id=status.id,
+        )
+        db.add(application)
+        await db.commit()
+        await db.refresh(application)
+
+        response = await client.patch(
+            f"/api/applications/{application.id}",
+            headers=auth_headers,
+            json={
+                "location": "Berlin",
+                "recruiter_title": "Hiring Manager",
+                "skills": ["React"],
+                "years_experience_min": 3,
+                "years_experience_max": 6,
+            },
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["location"] == "Berlin"
+        assert data["recruiter_title"] == "Hiring Manager"
+        assert data["skills"] == ["React"]
+        assert data["years_experience_min"] == 3
+        assert data["years_experience_max"] == 6
+
+    async def test_extract_application_preserves_fetch_http_errors(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        user_with_api_token: User,
+    ):
+        status = ApplicationStatus(
+            name="Applied",
+            color="#83a598",
+            is_default=False,
+            user_id=user_with_api_token.id,
+            order=1,
+        )
+        db.add(status)
+        await db.commit()
+        await db.refresh(status)
+
+        headers = {"X-API-Key": user_with_api_token.api_token}
+
+        with patch("app.api.applications.fetch_job_posting_html") as mock_fetch:
+            from fastapi import HTTPException
+
+            mock_fetch.side_effect = HTTPException(
+                status_code=502,
+                detail="Upstream fetch failed",
+            )
+
+            response = await client.post(
+                "/api/applications/extract",
+                headers=headers,
+                json={
+                    "url": "https://example.com/jobs/123",
+                    "status_id": status.id,
+                },
+            )
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == "Upstream fetch failed"
+
+    async def test_extract_application_accepts_jwt_session(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        db: AsyncSession,
+        test_user: User,
+    ):
+        status = ApplicationStatus(
+            name="Applied",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=1,
+        )
+        db.add(status)
+        await db.commit()
+        await db.refresh(status)
+
+        with (
+            patch(
+                "app.api.applications.get_ai_settings",
+                AsyncMock(
+                    return_value=AISettingsState(
+                        model="test-model",
+                        api_key="test-key",
+                        base_url="https://example.test",
+                    )
+                ),
+            ),
+            patch(
+                "app.api.applications.extract_job_data", new_callable=AsyncMock
+            ) as mock_extract,
+        ):
+            from app.schemas.job_lead import JobLeadExtractionInput
+
+            mock_extract.return_value = JobLeadExtractionInput(
+                title="JWT Extracted Role",
+                company="JWT Company",
+                description="Created via JWT session",
+                location="Remote",
+                salary_min=None,
+                salary_max=None,
+                salary_currency=None,
+                recruiter_name=None,
+                recruiter_title=None,
+                recruiter_linkedin_url=None,
+                years_experience_min=None,
+                years_experience_max=None,
+                source="LinkedIn",
+                posted_date=None,
+                requirements_must_have=[],
+                requirements_nice_to_have=[],
+                skills=["Python"],
+            )
+
+            response = await client.post(
+                "/api/applications/extract",
+                headers=auth_headers,
+                json={
+                    "url": "https://example.com/jobs/jwt-app",
+                    "status_id": status.id,
+                    "text": "JWT-authenticated extraction source text",
+                },
+            )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["company"] == "JWT Company"
+        assert data["job_title"] == "JWT Extracted Role"
+
+
+class TestJobLeadConversion:
+    async def test_convert_job_lead_preserves_lead_and_links_application(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+        test_job_lead: JobLead,
+    ):
+        status = ApplicationStatus(
+            name="Applied",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=1,
+        )
+        db.add(status)
+        await db.commit()
+
+        response = await client.post(
+            f"/api/job-leads/{test_job_lead.id}/convert",
+            headers=auth_headers,
+        )
+        assert response.status_code == 201
+
+        application = response.json()
+        assert application["job_lead_id"] == test_job_lead.id
+
+        result = await db.execute(select(JobLead).where(JobLead.id == test_job_lead.id))
+        refreshed_lead = result.scalar_one()
+        assert refreshed_lead.converted_to_application_id == application["id"]
+        assert refreshed_lead.status == "converted"
+
+    async def test_convert_job_lead_uses_visible_applied_status_and_job_description(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db: AsyncSession,
+        test_user: User,
+        test_job_lead: JobLead,
+    ):
+        test_job_lead.description = "Normalized lead description"
+        wishlist = ApplicationStatus(
+            name="Wishlist",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=99,
+        )
+        applied = ApplicationStatus(
+            name="Applied",
+            color="#8ec07c",
+            is_default=True,
+            user_id=None,
+            order=0,
+        )
+        db.add_all([wishlist, applied])
+        await db.commit()
+
+        response = await client.post(
+            f"/api/job-leads/{test_job_lead.id}/convert",
+            headers=auth_headers,
+        )
+        assert response.status_code == 201
+
+        application = response.json()
+        assert application["status"]["name"] == "Applied"
+        assert application["job_description"] == "Normalized lead description"
+        assert "description" not in application
+
+
+class TestJobLeadsGet:
+    """Tests for GET /api/job-leads/{id} endpoint."""
+
+    async def test_get_job_lead_unauthenticated(
+        self, client: AsyncClient, test_job_lead: JobLead
+    ):
+        """Test that getting a job lead requires authentication."""
+        response = await client.get(f"/api/job-leads/{test_job_lead.id}")
+        assert response.status_code == 401
+
+    async def test_get_job_lead_authenticated(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_job_lead: JobLead,
+    ):
+        """Test getting a job lead with valid authentication."""
+        response = await client.get(
+            f"/api/job-leads/{test_job_lead.id}",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["id"] == test_job_lead.id
+        assert data["title"] == "Software Engineer"
+        assert data["company"] == "Test Company"
+
+    async def test_get_job_lead_not_found(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+    ):
+        """Test getting a non-existent job lead returns 404."""
+        response = await client.get(
+            "/api/job-leads/non-existent-id",
+            headers=auth_headers,
+        )
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
+
+class TestReferenceDataValidation:
+    async def test_create_status_rejects_case_insensitive_duplicate_for_user(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        db: AsyncSession,
+        test_user: User,
+    ):
+        db.add(
+            ApplicationStatus(
+                name="Pipeline",
+                color="#123456",
+                is_default=False,
+                user_id=test_user.id,
+                order=1,
+            )
+        )
+        await db.commit()
+
+        response = await client.post(
+            "/api/statuses",
+            headers=auth_headers,
+            json={"name": " pipeline ", "color": "#abcdef"},
+        )
+
+        assert response.status_code == 409
+
+    async def test_create_round_type_rejects_duplicate_visible_name(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        db: AsyncSession,
+    ):
+        db.add(RoundType(name="Phone Screen", is_default=True, user_id=None))
+        await db.commit()
+
+        response = await client.post(
+            "/api/round-types",
+            headers=auth_headers,
+            json={"name": " phone screen "},
+        )
+
+        assert response.status_code == 409
+
+    async def test_get_job_lead_other_user(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        test_job_lead: JobLead,
+    ):
+        """Test that a user cannot access another user's job lead."""
+        # Create another user
+        other_user = User(
+            email="other@example.com",
+            password_hash=get_password_hash("pass123"),
+            is_admin=False,
+            is_active=True,
+        )
+        db.add(other_user)
+        await db.commit()
+        await db.refresh(other_user)
+
+        # Create auth headers for other user
+        token = create_access_token({"sub": other_user.id})
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # Try to access the first user's job lead
+        response = await client.get(
+            f"/api/job-leads/{test_job_lead.id}",
+            headers=headers,
+        )
+        assert response.status_code == 404
+
+
+class TestJobLeadsCreate:
+    """Tests for POST /api/job-leads endpoint."""
+
+    async def test_create_job_lead_unauthenticated(self, client: AsyncClient):
+        """Test that creating a job lead requires authentication."""
+        response = await client.post(
+            "/api/job-leads",
+            json={"url": "https://example.com/job/new"},
+        )
+        assert response.status_code == 401
+
+    async def test_create_job_lead_rejects_api_key_in_bearer_token(
+        self,
+        client: AsyncClient,
+        user_with_api_token: User,
+    ):
+        """Test creating a job lead rejects API keys in Bearer auth."""
+        headers = {"Authorization": f"Bearer {user_with_api_token.api_token}"}
+        response = await client.post(
+            "/api/job-leads",
+            headers=headers,
+            json={
+                "url": "https://example.com/job/new-bearer",
+                "html": "<html><body><h1>Job</h1></body></html>",
+            },
+        )
+
+        assert response.status_code == 401
+
+    async def test_create_job_lead_with_jwt_session(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        test_user: User,
+    ):
+        """Test creating a job lead using a normal JWT session."""
+        with (
+            patch(
+                "app.api.job_leads.get_ai_settings",
+                AsyncMock(
+                    return_value=AISettingsState(
+                        model="test-model",
+                        api_key="test-key",
+                        base_url="https://example.test",
+                    )
+                ),
+            ),
+            patch(
+                "app.api.job_leads.extract_job_data", new_callable=AsyncMock
+            ) as mock_extract,
+        ):
+            from app.schemas.job_lead import JobLeadExtractionInput
+
+            mock_extract.return_value = JobLeadExtractionInput(
+                title="JWT Job",
+                company="JWT Company",
+                description="Created via JWT session",
+                location="Remote",
+                salary_min=None,
+                salary_max=None,
+                salary_currency=None,
+                recruiter_name=None,
+                recruiter_title=None,
+                recruiter_linkedin_url=None,
+                years_experience_min=None,
+                years_experience_max=None,
+                source="Company Website",
+                posted_date=None,
+                requirements_must_have=[],
+                requirements_nice_to_have=[],
+                skills=["Python"],
+            )
+
+            response = await client.post(
+                "/api/job-leads",
+                headers=auth_headers,
+                json={
+                    "url": "https://example.com/job/new-jwt",
+                    "text": "JWT-authenticated extraction source text",
+                },
+            )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["title"] == "JWT Job"
+        assert data["company"] == "JWT Company"
+
+    async def test_create_job_lead_with_x_api_key(
+        self,
+        client: AsyncClient,
+        user_with_api_token: User,
+    ):
+        """Test creating a job lead using X-API-Key header."""
+        headers = {"X-API-Key": user_with_api_token.api_token}
+
+        with patch(
+            "app.api.job_leads.extract_job_data", new_callable=AsyncMock
+        ) as mock_extract:
+            from app.schemas.job_lead import JobLeadExtractionInput
+
+            mock_extract.return_value = JobLeadExtractionInput(
+                title="API Key Job",
+                company="API Company",
+                description=None,
+                location=None,
+                salary_min=None,
+                salary_max=None,
+                salary_currency=None,
+                recruiter_name=None,
+                recruiter_title=None,
+                recruiter_linkedin_url=None,
+                years_experience_min=None,
+                years_experience_max=None,
+                source=None,
+                posted_date=None,
+                requirements_must_have=[],
+                requirements_nice_to_have=[],
+                skills=[],
+            )
+
+            # Provide HTML content to avoid URL fetching
+            response = await client.post(
+                "/api/job-leads",
+                headers=headers,
+                json={
+                    "url": "https://example.com/job/new-apikey",
+                    "html": "<html><body><h1>Job</h1></body></html>",
+                },
+            )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["title"] == "API Key Job"
+
+    async def test_create_job_lead_duplicate_url(
+        self,
+        client: AsyncClient,
+        user_with_api_token: User,
+        db: AsyncSession,
+    ):
+        """Test that creating a job lead with duplicate URL returns 409."""
+        # First create a job lead
+        existing_lead = JobLead(
+            user_id=user_with_api_token.id,
+            url="https://example.com/job/duplicate",
+            status="extracted",
+        )
+        db.add(existing_lead)
+        await db.commit()
+
+        headers = {"X-API-Key": user_with_api_token.api_token}
+
+        response = await client.post(
+            "/api/job-leads",
+            headers=headers,
+            json={"url": "https://example.com/job/duplicate"},
+        )
+
+        assert response.status_code == 409
+        error = response.json()["detail"]
+        assert error["code"] == "DUPLICATE_RESOURCE"
+        assert "already" in error["message"].lower()
+
+    async def test_create_job_lead_duplicate_url_commit_race_returns_409(
+        self,
+        client: AsyncClient,
+        user_with_api_token: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Test that commit-time duplicate races still return 409."""
+        headers = {"X-API-Key": user_with_api_token.api_token}
+
+        integrity_error = IntegrityError(
+            statement="INSERT INTO job_leads ...",
+            params={},
+            orig=Exception(
+                'duplicate key value violates unique constraint "uq_job_leads_user_url"'
+            ),
+        )
+
+        async def fail_commit():
+            raise integrity_error
+
+        async def noop_rollback():
+            return None
+
+        from app.core.database import get_db
+
+        override = app.dependency_overrides[get_db]
+        async for session in override():
+            monkeypatch.setattr(session, "commit", fail_commit)
+            monkeypatch.setattr(session, "rollback", noop_rollback)
+            break
+
+        with patch("app.api.job_leads.extract_job_data") as mock_extract:
+            from app.schemas.job_lead import JobLeadExtractionInput
+
+            mock_extract.return_value = JobLeadExtractionInput(
+                title="Race Job",
+                company="Race Co",
+                description=None,
+                location=None,
+                salary_min=None,
+                salary_max=None,
+                salary_currency=None,
+                recruiter_name=None,
+                recruiter_title=None,
+                recruiter_linkedin_url=None,
+                years_experience_min=None,
+                years_experience_max=None,
+                source=None,
+                posted_date=None,
+                requirements_must_have=[],
+                requirements_nice_to_have=[],
+                skills=[],
+            )
+
+            response = await client.post(
+                "/api/job-leads",
+                headers=headers,
+                json={
+                    "url": "https://example.com/job/race-check",
+                    "html": "<html><body><h1>Job</h1></body></html>",
+                },
+            )
+
+        assert response.status_code == 409
+        error = response.json()["detail"]
+        assert error["code"] == "DUPLICATE_RESOURCE"
+
+    async def test_create_job_lead_with_html_content(
+        self,
+        client: AsyncClient,
+        user_with_api_token: User,
+    ):
+        """Test creating a job lead with pre-fetched HTML content."""
+        headers = {"X-API-Key": user_with_api_token.api_token}
+
+        with patch("app.api.job_leads.extract_job_data") as mock_extract:
+            from app.schemas.job_lead import JobLeadExtractionInput
+
+            mock_extract.return_value = JobLeadExtractionInput(
+                title="HTML Job",
+                company="HTML Company",
+                description=None,
+                location=None,
+                salary_min=None,
+                salary_max=None,
+                salary_currency=None,
+                recruiter_name=None,
+                recruiter_title=None,
+                recruiter_linkedin_url=None,
+                years_experience_min=None,
+                years_experience_max=None,
+                source=None,
+                posted_date=None,
+                requirements_must_have=[],
+                requirements_nice_to_have=[],
+                skills=[],
+            )
+
+            response = await client.post(
+                "/api/job-leads",
+                headers=headers,
+                json={
+                    "url": "https://example.com/job/with-html",
+                    "html": "<html><body><h1>Job Title</h1></body></html>",
+                },
+            )
+
+        assert response.status_code == 201
+        # Verify extract_job_data was called with the HTML content
+        mock_extract.assert_called_once()
+        call_kwargs = mock_extract.call_args.kwargs
+        assert "Job Title" in call_kwargs["html"]  # HTML is passed as keyword arg
+
+
+class TestJobLeadsDelete:
+    """Tests for DELETE /api/job-leads/{id} endpoint."""
+
+    async def test_delete_job_lead_unauthenticated(
+        self,
+        client: AsyncClient,
+        test_job_lead: JobLead,
+    ):
+        """Test that deleting a job lead requires authentication."""
+        response = await client.delete(f"/api/job-leads/{test_job_lead.id}")
+        assert response.status_code == 401
+
+    async def test_delete_job_lead_authenticated(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_job_lead: JobLead,
+        db: AsyncSession,
+    ):
+        """Test deleting a job lead with valid authentication."""
+        response = await client.delete(
+            f"/api/job-leads/{test_job_lead.id}",
+            headers=auth_headers,
+        )
+        assert response.status_code == 204
+
+        # Verify the job lead was deleted
+        result = await db.execute(select(JobLead).where(JobLead.id == test_job_lead.id))
+        assert result.scalars().first() is None
+
+    async def test_delete_job_lead_not_found(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+    ):
+        """Test deleting a non-existent job lead returns 404."""
+        response = await client.delete(
+            "/api/job-leads/non-existent-id",
+            headers=auth_headers,
+        )
+        assert response.status_code == 404
+
+
+class TestJobLeadsRetry:
+    """Tests for POST /api/job-leads/{id}/retry endpoint."""
+
+    async def test_retry_job_lead_unauthenticated(
+        self,
+        client: AsyncClient,
+        failed_job_lead: JobLead,
+    ):
+        """Test that retrying a job lead requires authentication."""
+        response = await client.post(f"/api/job-leads/{failed_job_lead.id}/retry")
+        assert response.status_code == 401
+
+    async def test_retry_job_lead_not_failed(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_job_lead: JobLead,
+    ):
+        """Test that retrying a non-failed job lead returns 400."""
+        response = await client.post(
+            f"/api/job-leads/{test_job_lead.id}/retry",
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
+        assert "failed" in response.json()["detail"].lower()
+
+    async def test_retry_job_lead_success(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        failed_job_lead: JobLead,
+    ):
+        """Test successfully retrying a failed job lead."""
+        with (
+            patch("app.api.job_leads.fetch_job_posting_html") as mock_fetch,
+            patch("app.api.job_leads.extract_job_data") as mock_extract,
+        ):
+            from app.schemas.job_lead import JobLeadExtractionInput
+
+            mock_fetch.return_value = "<html><body>Job content</body></html>"
+            mock_extract.return_value = JobLeadExtractionInput(
+                title="Retried Job",
+                company="Retried Company",
+                description=None,
+                location="Nowhere",
+                salary_min=None,
+                salary_max=None,
+                salary_currency=None,
+                recruiter_name=None,
+                recruiter_title=None,
+                recruiter_linkedin_url=None,
+                years_experience_min=None,
+                years_experience_max=None,
+                source=None,
+                posted_date=None,
+                requirements_must_have=["Python"],
+                requirements_nice_to_have=[],
+                skills=["Python"],
+            )
+
+            response = await client.post(
+                f"/api/job-leads/{failed_job_lead.id}/retry",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "extracted"
+        assert data["title"] == "Retried Job"
+        assert data["error_message"] is None
+
+        assert mock_extract.await_count == 1
+        await_args = mock_extract.await_args
+        assert await_args is not None
+        assert await_args.args == ()
+        assert await_args.kwargs["html"] == "<html><body>Job content</body></html>"
+        assert await_args.kwargs["url"] == failed_job_lead.url
+
+    async def test_retry_job_lead_returns_400_for_value_errors(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        failed_job_lead: JobLead,
+        db: AsyncSession,
+    ):
+        with (
+            patch("app.api.job_leads.fetch_job_posting_html") as mock_fetch,
+            patch("app.api.job_leads.extract_job_data") as mock_extract,
+        ):
+            mock_fetch.return_value = "<html><body>Job content</body></html>"
+            mock_extract.side_effect = ValueError("Invalid extracted payload")
+
+            response = await client.post(
+                f"/api/job-leads/{failed_job_lead.id}/retry",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid extracted payload"
+
+        await db.refresh(failed_job_lead)
+        assert failed_job_lead.status == "failed"
+        assert (
+            failed_job_lead.error_message == "Retry failed: Invalid extracted payload"
+        )
+
+
+# ============================================================================
+# User Profile API Tests
+# ============================================================================
+
+
+class TestProfileGet:
+    """Tests for GET /api/profile endpoint."""
+
+    async def test_get_profile_unauthenticated(self, client: AsyncClient):
+        """Test that getting profile requires authentication."""
+        response = await client.get("/api/profile")
+        assert response.status_code == 401
+
+    async def test_get_profile_creates_if_not_exists(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_user: User,
+        db: AsyncSession,
+    ):
+        """Test that getting profile creates one if it doesn't exist."""
+        # Verify no profile exists
+        result = await db.execute(
+            select(UserProfile).where(UserProfile.user_id == test_user.id)
+        )
+        assert result.scalars().first() is None
+
+        response = await client.get("/api/profile", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["user_id"] == test_user.id
+        # New profile should have null fields
+        assert data["first_name"] is None
+        assert data["last_name"] is None
+
+    async def test_get_profile_returns_existing(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_user: User,
+        db: AsyncSession,
+    ):
+        """Test that getting profile returns existing profile data."""
+        # Create a profile
+        profile = UserProfile(
+            user_id=test_user.id,
+            first_name="John",
+            last_name="Doe",
+            email="john@example.com",
+            location="San Francisco, CA",
+        )
+        db.add(profile)
+        await db.commit()
+
+        response = await client.get("/api/profile", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["first_name"] == "John"
+        assert data["last_name"] == "Doe"
+        assert data["email"] == "john@example.com"
+        assert data["location"] == "San Francisco, CA"
+
+
+class TestProfileUpdate:
+    """Tests for PUT /api/profile endpoint."""
+
+    async def test_update_profile_unauthenticated(self, client: AsyncClient):
+        """Test that updating profile requires authentication."""
+        response = await client.put(
+            "/api/profile",
+            json={"first_name": "Jane"},
+        )
+        assert response.status_code == 401
+
+    async def test_update_profile_creates_if_not_exists(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_user: User,
+        db: AsyncSession,
+    ):
+        """Test that updating profile creates one if it doesn't exist."""
+        response = await client.put(
+            "/api/profile",
+            headers=auth_headers,
+            json={
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "location": "New York, NY",
+            },
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["first_name"] == "Jane"
+        assert data["last_name"] == "Smith"
+        assert data["location"] == "New York, NY"
+
+    async def test_update_profile_partial_update(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_user: User,
+        db: AsyncSession,
+    ):
+        """Test partial update of profile fields."""
+        # Create a profile with initial data
+        profile = UserProfile(
+            user_id=test_user.id,
+            first_name="John",
+            last_name="Doe",
+            location="San Francisco, CA",
+        )
+        db.add(profile)
+        await db.commit()
+
+        # Update only first_name
+        response = await client.put(
+            "/api/profile",
+            headers=auth_headers,
+            json={"first_name": "Jane"},
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["first_name"] == "Jane"  # Updated
+        assert data["last_name"] == "Doe"  # Unchanged
+        assert data["location"] == "San Francisco, CA"  # Unchanged
+
+    async def test_update_profile_work_authorization(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_user: User,
+        db: AsyncSession,
+    ):
+        """Test updating work authorization fields."""
+        response = await client.put(
+            "/api/profile",
+            headers=auth_headers,
+            json={
+                "authorized_to_work": "US Citizen",
+                "requires_sponsorship": False,
+            },
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["authorized_to_work"] == "US Citizen"
+        assert data["requires_sponsorship"] is False
+
+    async def test_update_profile_skills(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_user: User,
+        db: AsyncSession,
+    ):
+        """Test updating skills array."""
+        response = await client.put(
+            "/api/profile",
+            headers=auth_headers,
+            json={
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker"],
+            },
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["skills"] == ["Python", "FastAPI", "PostgreSQL", "Docker"]
+
+    async def test_update_profile_invalid_linkedin_url(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+    ):
+        """Test that invalid LinkedIn URL is rejected."""
+        response = await client.put(
+            "/api/profile",
+            headers=auth_headers,
+            json={"linkedin_url": "not-a-valid-url"},
+        )
+        assert response.status_code == 422
+
+    async def test_update_profile_valid_linkedin_url(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+    ):
+        """Test that valid LinkedIn URL is accepted."""
+        response = await client.put(
+            "/api/profile",
+            headers=auth_headers,
+            json={"linkedin_url": "https://linkedin.com/in/johndoe"},
+        )
+        assert response.status_code == 200
+        assert response.json()["linkedin_url"] == "https://linkedin.com/in/johndoe"
+
+
+# ============================================================================
+# Admin Users API Tests
+# ============================================================================
+
+
+class TestAdminUsersList:
+    """Tests for GET /api/admin/users endpoint."""
+
+    async def test_list_users_filters_by_email_query(
+        self,
+        client: AsyncClient,
+        admin_auth_headers: dict,
+        db: AsyncSession,
+    ):
+        db.add_all(
+            [
+                User(
+                    email="alice@example.com",
+                    password_hash=get_password_hash("password123"),
+                    is_admin=False,
+                    is_active=True,
+                ),
+                User(
+                    email="bob@example.com",
+                    password_hash=get_password_hash("password123"),
+                    is_admin=False,
+                    is_active=True,
+                ),
+            ]
+        )
+        await db.commit()
+
+        response = await client.get(
+            "/api/admin/users?query=%20ALICE%20",
+            headers=admin_auth_headers,
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["total"] == 1
+        assert data["total_pages"] == 1
+        assert [item["email"] for item in data["items"]] == ["alice@example.com"]
+
+
+# ============================================================================
+# Admin AI Settings API Tests
+# ============================================================================
+
+
+class TestAdminAISettingsGet:
+    """Tests for GET /api/admin/ai-settings endpoint."""
+
+    async def test_get_ai_settings_unauthenticated(self, client: AsyncClient):
+        """Test that getting AI settings requires authentication."""
+        response = await client.get("/api/admin/ai-settings")
+        assert response.status_code == 401
+
+    async def test_get_ai_settings_non_admin(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+    ):
+        """Test that getting AI settings requires admin privileges."""
+        response = await client.get("/api/admin/ai-settings", headers=auth_headers)
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    async def test_get_ai_settings_admin(
+        self,
+        client: AsyncClient,
+        admin_auth_headers: dict,
+    ):
+        """Test getting AI settings as admin."""
+        response = await client.get(
+            "/api/admin/ai-settings",
+            headers=admin_auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "litellm_model" in data
+        assert "litellm_api_key_masked" in data
+        assert "litellm_base_url" in data
+        assert "is_configured" in data
+
+    async def test_get_ai_settings_shows_masked_key(
+        self,
+        client: AsyncClient,
+        admin_auth_headers: dict,
+        db: AsyncSession,
+    ):
+        """Test that API key is masked in response."""
+        # Set an API key
+        from app.core.security import encrypt_api_key
+
+        test_api_key = "sk-test-secret-key-1234"
+        setting = SystemSettings(
+            key=SystemSettings.KEY_LITELLM_API_KEY,
+            value=encrypt_api_key(test_api_key),
+        )
+        db.add(setting)
+        setting2 = SystemSettings(
+            key=SystemSettings.KEY_LITELLM_MODEL,
+            value="gpt-4o",
+        )
+        db.add(setting2)
+        await db.commit()
+
+        response = await client.get(
+            "/api/admin/ai-settings",
+            headers=admin_auth_headers,
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        # Key should be masked, showing only last 4 chars
+        assert data["litellm_api_key_masked"] is not None
+        assert data["litellm_api_key_masked"].endswith("1234")
+        # The full key should NOT be visible
+        assert test_api_key not in data["litellm_api_key_masked"]
+        # Check the masking format (...last4)
+        assert "..." in data["litellm_api_key_masked"]
+
+
+class TestAdminAISettingsUpdate:
+    """Tests for PUT /api/admin/ai-settings endpoint."""
+
+    async def test_update_ai_settings_unauthenticated(self, client: AsyncClient):
+        """Test that updating AI settings requires authentication."""
+        response = await client.put(
+            "/api/admin/ai-settings",
+            json={"litellm_model": "gpt-4o"},
+        )
+        assert response.status_code == 401
+
+    async def test_update_ai_settings_non_admin(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+    ):
+        """Test that updating AI settings requires admin privileges."""
+        response = await client.put(
+            "/api/admin/ai-settings",
+            headers=auth_headers,
+            json={"litellm_model": "gpt-4o"},
+        )
+        assert response.status_code == 403
+
+    async def test_update_ai_settings_admin(
+        self,
+        client: AsyncClient,
+        admin_auth_headers: dict,
+    ):
+        """Test updating AI settings as admin."""
+        response = await client.put(
+            "/api/admin/ai-settings",
+            headers=admin_auth_headers,
+            json={
+                "litellm_model": "gpt-4o",
+                "litellm_api_key": "sk-test-api-key",
+                "litellm_base_url": "https://api.openai.com/v1",
+            },
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["litellm_model"] == "gpt-4o"
+        assert data["litellm_base_url"] == "https://api.openai.com/v1"
+        # API key should be masked in response
+        assert data["litellm_api_key_masked"] is not None
+        assert "sk-test-api-key" not in data["litellm_api_key_masked"]
+        assert data["is_configured"] is True
+
+    async def test_update_ai_settings_partial(
+        self,
+        client: AsyncClient,
+        admin_auth_headers: dict,
+        db: AsyncSession,
+    ):
+        """Test partial update of AI settings."""
+        from app.core.security import encrypt_api_key
+
+        db.add(
+            SystemSettings(
+                key=SystemSettings.KEY_LITELLM_API_KEY,
+                value=encrypt_api_key("sk-existing-1234"),
+            )
+        )
+        await db.commit()
+
+        response = await client.put(
+            "/api/admin/ai-settings",
+            headers=admin_auth_headers,
+            json={"litellm_model": "claude-3-sonnet"},
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["litellm_model"] == "claude-3-sonnet"
+        assert data["litellm_api_key_masked"] == "...1234"
+        assert data["is_configured"] is True
+
+    async def test_update_ai_settings_empty_model_validation(
+        self,
+        client: AsyncClient,
+        admin_auth_headers: dict,
+    ):
+        """Test that empty model name is rejected."""
+        response = await client.put(
+            "/api/admin/ai-settings",
+            headers=admin_auth_headers,
+            json={"litellm_model": "   "},  # Whitespace only
+        )
+        assert response.status_code == 422  # Validation error
+
+
+# ============================================================================
+# Authentication Method Tests
+# ============================================================================
+
+
+class TestAuthenticationMethods:
+    """Tests for different authentication methods."""
+
+    async def test_bearer_token_jwt_auth(
+        self,
+        client: AsyncClient,
+        test_user: User,
+    ):
+        """Test authentication with JWT Bearer token."""
+        token = create_access_token({"sub": test_user.id})
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = await client.get("/api/profile", headers=headers)
+        assert response.status_code == 200
+
+    async def test_bearer_token_api_token_auth_is_rejected(
+        self,
+        client: AsyncClient,
+        user_with_api_token: User,
+    ):
+        """Test API keys are rejected in Authorization Bearer."""
+        headers = {"Authorization": f"Bearer {user_with_api_token.api_token}"}
+        response = await client.post(
+            "/api/job-leads",
+            headers=headers,
+            json={
+                "url": "https://example.com/job/auth-test",
+                "html": "<html><body><h1>Job</h1></body></html>",
+            },
+        )
+
+        assert response.status_code == 401
+
+    async def test_x_api_key_header_auth(
+        self,
+        client: AsyncClient,
+        user_with_api_token: User,
+    ):
+        """Test authentication with X-API-Key header."""
+        headers = {"X-API-Key": user_with_api_token.api_token}
+
+        # X-API-Key works for job_leads create endpoint
+        with patch(
+            "app.api.job_leads.extract_job_data", new_callable=AsyncMock
+        ) as mock_extract:
+            from app.schemas.job_lead import JobLeadExtractionInput
+
+            mock_extract.return_value = JobLeadExtractionInput(
+                title="Test",
+                company="Test",
+                description=None,
+                location=None,
+                salary_min=None,
+                salary_max=None,
+                salary_currency=None,
+                recruiter_name=None,
+                recruiter_title=None,
+                recruiter_linkedin_url=None,
+                years_experience_min=None,
+                years_experience_max=None,
+                source=None,
+                posted_date=None,
+                requirements_must_have=[],
+                requirements_nice_to_have=[],
+                skills=[],
+            )
+
+            # Provide HTML content to avoid URL fetching
+            response = await client.post(
+                "/api/job-leads",
+                headers=headers,
+                json={
+                    "url": "https://example.com/job/x-api-key-test",
+                    "html": "<html><body><h1>Job</h1></body></html>",
+                },
+            )
+
+        assert response.status_code == 201
+
+    async def test_invalid_token_returns_401(self, client: AsyncClient):
+        """Test that invalid tokens return 401."""
+        headers = {"Authorization": "Bearer invalid-token-12345"}
+
+        response = await client.get("/api/profile", headers=headers)
+        assert response.status_code == 401
+
+    async def test_invalid_api_token_returns_401(self, client: AsyncClient):
+        """Test that invalid API tokens return 401."""
+        headers = {"X-API-Key": "invalid-api-key-12345"}
+
+        response = await client.post(
+            "/api/job-leads",
+            headers=headers,
+            json={"url": "https://example.com/job/invalid-key"},
+        )
+        assert response.status_code == 401
+
+    async def test_disabled_user_returns_403(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+    ):
+        """Test that disabled users get 403 Forbidden."""
+        # Create a disabled user
+        disabled_user = User(
+            email="disabled@example.com",
+            password_hash=get_password_hash("pass123"),
+            is_admin=False,
+            is_active=False,
+        )
+        db.add(disabled_user)
+        await db.commit()
+        await db.refresh(disabled_user)
+
+        token = create_access_token({"sub": disabled_user.id})
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = await client.get("/api/profile", headers=headers)
+        assert response.status_code == 403
+        assert "disabled" in response.json()["detail"].lower()
+
+
+# ============================================================================
+# Health Check Test
+# ============================================================================
+
+
+class TestHealthCheck:
+    """Tests for the health check endpoint."""
+
+    async def test_health_check(self, client: AsyncClient):
+        """Test that health check returns healthy status."""
+        response = await client.get("/health")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["status"] == "healthy"
+
+
+class TestRoundMediaUploads:
+    async def test_upload_media_accepts_wav_audio(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+        db: AsyncSession,
+        test_user: User,
+    ):
+        status_obj = ApplicationStatus(
+            name="Applied",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=1,
+        )
+        round_type = RoundType(
+            name="Phone Screen",
+            is_default=False,
+            user_id=test_user.id,
+        )
+        db.add_all([status_obj, round_type])
+        await db.commit()
+        await db.refresh(status_obj)
+        await db.refresh(round_type)
+
+        application = Application(
+            user_id=test_user.id,
+            company="SmokeCo",
+            job_title="CLI Audio Test",
+            status_id=status_obj.id,
+        )
+        db.add(application)
+        await db.commit()
+        await db.refresh(application)
+
+        round_obj = Round(
+            application_id=application.id,
+            round_type_id=round_type.id,
+        )
+        db.add(round_obj)
+        await db.commit()
+        await db.refresh(round_obj)
+
+        wav_bytes = (
+            b"RIFF"
+            + (36 + 1600).to_bytes(4, "little")
+            + b"WAVEfmt "
+            + (16).to_bytes(4, "little")
+            + (1).to_bytes(2, "little")
+            + (1).to_bytes(2, "little")
+            + (8000).to_bytes(4, "little")
+            + (16000).to_bytes(4, "little")
+            + (2).to_bytes(2, "little")
+            + (16).to_bytes(2, "little")
+            + b"data"
+            + (1600).to_bytes(4, "little")
+            + (b"\x00\x00" * 800)
+        )
+
+        fake_magic = SimpleNamespace(
+            from_buffer=lambda *_args, **_kwargs: "audio/x-wav",
+            from_file=lambda *_args, **_kwargs: "audio/x-wav",
+        )
+        with patch("app.api.utils.zip_utils.magic", fake_magic):
+            response = await client.post(
+                f"/api/rounds/{round_obj.id}/media",
+                headers=auth_headers,
+                files={"file": ("sample.wav", wav_bytes, "audio/wav")},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["media"][0]["media_type"] == "audio"
+        assert payload["media"][0]["original_filename"] == "sample.wav"
+        assert payload["media"][0]["file_path"].endswith(".wav")
+
+
+class TestCorsPolicy:
+    async def test_cors_does_not_allow_arbitrary_origin(self, client: AsyncClient):
+        response = await client.options(
+            "/health",
+            headers={
+                "Origin": "https://evil.example.com",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.headers.get("access-control-allow-origin") is None
+
+    async def test_cors_allows_browser_extension_origins(self, client: AsyncClient):
+        response = await client.options(
+            "/health",
+            headers={
+                "Origin": "chrome-extension://abcdefghijklmnop",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        assert response.status_code == 200
+        assert (
+            response.headers.get("access-control-allow-origin")
+            == "chrome-extension://abcdefghijklmnop"
+        )

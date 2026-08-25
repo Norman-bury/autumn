@@ -1,0 +1,24 @@
+---
+title: How-to
+description: Task-focused guides for operating and integrating Autumn.
+---
+
+Use the how-to guides when Autumn is already installed and you know the task you want to complete.
+
+## Access and integrations
+
+- [Configure API keys](./configure-api-keys.md)
+- [Configure dashboard features and time zone](./configure-dashboard-features-and-time-zone.md)
+- [Use the CLI](./use-the-cli.md)
+- [Use the browser extension](./use-the-browser-extension.md)
+
+## Data portability and operations
+
+- [Import and export data](./import-and-export-data.md)
+- [Back up and restore Autumn](./backup-and-restore-autumn.md)
+- [Upgrade Autumn](./upgrade-autumn.md)
+- [Configure AI settings](./configure-ai-settings.md)
+
+## Looking for installation?
+
+Use [Install Autumn](../install/index.md) for deployment guides.
