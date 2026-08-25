@@ -83,6 +83,12 @@ export default function Layout({ children }: Props) {
               >
                 企业入口
               </Link>
+              <Link
+                to="/soe-directory"
+                className={linkClass('/soe-directory')}
+              >
+                央企国企
+              </Link>
               <Link to="/analytics" className={linkClass('/analytics')}>
                 数据复盘
               </Link>
@@ -153,6 +159,12 @@ export default function Layout({ children }: Props) {
                 className={mobileLinkClass('/company-portals')}
               >
                 企业入口
+              </Link>
+              <Link
+                to="/soe-directory"
+                className={mobileLinkClass('/soe-directory')}
+              >
+                央企国企
               </Link>
               <Link to="/analytics" className={mobileLinkClass('/analytics')}>
                 数据复盘

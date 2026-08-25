@@ -25,6 +25,7 @@ import SettingsAPIKey from './components/settings/SettingsAPIKey';
 import SettingsProfile from './components/settings/SettingsProfile';
 import Schedule from './pages/Schedule';
 import CompanyPortals from './pages/CompanyPortals';
+import SOEDirectory from './pages/SOEDirectory';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -144,6 +145,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <CompanyPortals />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/soe-directory"
+        element={
+          <ProtectedRoute>
+            <SOEDirectory />
           </ProtectedRoute>
         }
       />

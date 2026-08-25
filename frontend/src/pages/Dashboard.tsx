@@ -87,7 +87,7 @@ export default function Dashboard() {
         <header className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="text-accent mb-2 text-sm font-semibold">
-              2027 届秋招 · 杭州
+              2027 届秋招 · 多城市
             </p>
             <h1 className="text-primary text-2xl font-bold">秋招总览</h1>
             <p className="text-secondary mt-2">
@@ -198,20 +198,30 @@ export default function Dashboard() {
           </section>
         </div>
 
-        <section className="border-tertiary mt-6 grid grid-cols-1 gap-0 overflow-hidden rounded-lg border md:grid-cols-3">
+        <section className="border-tertiary mt-6 grid grid-cols-1 gap-0 overflow-hidden rounded-lg border sm:grid-cols-2 lg:grid-cols-4">
           <Link
             to="/company-portals"
-            className="bg-bg1 hover:bg-bg2 border-tertiary flex items-center gap-3 border-b p-5 md:border-r md:border-b-0"
+            className="bg-bg1 hover:bg-bg2 border-tertiary flex items-center gap-3 border-b p-5 sm:border-r lg:border-b-0"
           >
             <i className="bi bi-building text-blue-bright icon-lg" />
             <div>
-              <p className="text-primary font-medium">杭州企业入口</p>
-              <p className="text-muted mt-1 text-xs">已核验的中型 AI 公司</p>
+              <p className="text-primary font-medium">企业投递入口</p>
+              <p className="text-muted mt-1 text-xs">多城市AI公司校招</p>
+            </div>
+          </Link>
+          <Link
+            to="/soe-directory"
+            className="bg-bg1 hover:bg-bg2 border-tertiary flex items-center gap-3 border-b p-5 lg:border-r lg:border-b-0"
+          >
+            <i className="bi bi-bank text-yellow-bright icon-lg" />
+            <div>
+              <p className="text-primary font-medium">央企国企目录</p>
+              <p className="text-muted mt-1 text-xs">河北天津·含未开启</p>
             </div>
           </Link>
           <Link
             to="/applications"
-            className="bg-bg1 hover:bg-bg2 border-tertiary flex items-center gap-3 border-b p-5 md:border-r md:border-b-0"
+            className="bg-bg1 hover:bg-bg2 border-tertiary flex items-center gap-3 border-b p-5 sm:border-r lg:border-b-0"
           >
             <i className="bi bi-table text-yellow-bright icon-lg" />
             <div>

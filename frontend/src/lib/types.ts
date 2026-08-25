@@ -220,6 +220,7 @@ export interface CompanyPortal {
     | 'closing_soon'
     | 'rolling'
     | 'closed'
+    | 'not_started'
     | 'needs_review';
   application_deadline: string | null;
   verification_status: 'verified' | 'needs_review' | 'expired';

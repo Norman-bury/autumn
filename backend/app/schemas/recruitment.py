@@ -23,6 +23,7 @@ RecruitmentStatus = Literal[
     "closing_soon",
     "rolling",
     "closed",
+    "not_started",
     "needs_review",
 ]
 

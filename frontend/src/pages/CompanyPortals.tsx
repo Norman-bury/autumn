@@ -7,6 +7,8 @@ import Loading from '../components/Loading';
 import { listCompanyPortals } from '../lib/recruitment';
 import type { CompanyPortal } from '../lib/types';
 
+const CITIES = ['全部', '杭州', '北京', '上海', '深圳', '天津', '石家庄', '保定', '廊坊', '唐山', '邯郸', '秦皇岛', '任丘', '邢台', '张家口'];
+
 const RECRUITMENT_STATUS_LABELS: Record<
   CompanyPortal['recruitment_status'],
   string
@@ -15,6 +17,7 @@ const RECRUITMENT_STATUS_LABELS: Record<
   closing_soon: '即将截止',
   rolling: '滚动招聘',
   closed: '已截止',
+  not_started: '未开启',
   needs_review: '待复核',
 };
 
@@ -26,6 +29,7 @@ const RECRUITMENT_STATUS_STYLES: Record<
   closing_soon: 'bg-yellow/15 text-yellow-bright',
   rolling: 'bg-blue/15 text-blue-bright',
   closed: 'bg-red/15 text-red-bright',
+  not_started: 'bg-bg2 text-muted',
   needs_review: 'bg-bg2 text-muted',
 };
 
@@ -36,6 +40,7 @@ export default function CompanyPortals() {
     null
   );
   const [search, setSearch] = useState('');
+  const [city, setCity] = useState('全部');
   const [mediumOnly, setMediumOnly] = useState(false);
   const [recruitmentStatus, setRecruitmentStatus] = useState<
     CompanyPortal['recruitment_status'] | ''
@@ -50,7 +55,7 @@ export default function CompanyPortals() {
       setPortals(
         await listCompanyPortals({
           search: search || undefined,
-          city: '杭州',
+          city: city === '全部' ? undefined : city,
           company_scale: mediumOnly ? '中型' : undefined,
           recruitment_status: recruitmentStatus || undefined,
         })
@@ -60,7 +65,7 @@ export default function CompanyPortals() {
     } finally {
       setLoading(false);
     }
-  }, [mediumOnly, recruitmentStatus, search]);
+  }, [city, mediumOnly, recruitmentStatus, search]);
 
   useEffect(() => {
     const timer = window.setTimeout(loadPortals, 180);
@@ -72,16 +77,16 @@ export default function CompanyPortals() {
       <div className="mx-auto max-w-6xl px-4 py-8">
         <div className="mb-6">
           <p className="text-accent mb-2 text-sm font-semibold">
-            杭州 · AI 方向
+            多城市 · AI 方向
           </p>
           <h1 className="text-primary text-2xl font-bold">企业投递入口</h1>
           <p className="text-secondary mt-2">
-            已逐条核对2027届校招、杭州岗位和投递入口。共收录
-            {portals.length} 家当前可投企业。
+            已逐条核对2027届校招岗位和投递入口，覆盖杭州、北京、上海、深圳、天津及河北。共收录
+            {portals.length} 家企业。
           </p>
         </div>
 
-        <div className="bg-bg1 mb-6 flex flex-col gap-3 rounded-lg p-4 sm:flex-row sm:items-center">
+        <div className="bg-bg1 mb-6 flex flex-col gap-3 rounded-lg p-4 lg:flex-row lg:items-center">
           <div className="relative flex-1">
             <i className="bi bi-search text-muted absolute top-1/2 left-3 -translate-y-1/2" />
             <input
@@ -91,6 +96,16 @@ export default function CompanyPortals() {
               className="bg-bg2 text-fg1 placeholder-muted focus:ring-accent-bright w-full rounded py-2 pr-3 pl-9 focus:ring-1 focus:outline-none"
             />
           </div>
+          <select
+            aria-label="城市筛选"
+            value={city}
+            onChange={(event) => setCity(event.target.value)}
+            className="bg-bg2 text-fg1 focus:ring-accent-bright rounded px-3 py-2 text-sm focus:ring-1 focus:outline-none"
+          >
+            {CITIES.map((c) => (
+              <option key={c} value={c}>{c === '全部' ? '全部城市' : c}</option>
+            ))}
+          </select>
           <label className="text-primary flex cursor-pointer items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -110,10 +125,11 @@ export default function CompanyPortals() {
             }
             className="bg-bg2 text-fg1 focus:ring-accent-bright rounded px-3 py-2 text-sm focus:ring-1 focus:outline-none"
           >
-            <option value="">全部开放状态</option>
+            <option value="">全部状态</option>
             <option value="open">开放中</option>
             <option value="closing_soon">即将截止</option>
             <option value="rolling">滚动招聘</option>
+            <option value="not_started">未开启</option>
           </select>
         </div>
 
@@ -139,6 +155,9 @@ export default function CompanyPortals() {
                     </h2>
                     <p className="text-secondary mt-1 text-sm">
                       {portal.industry} · {portal.company_scale} · {portal.city}
+                      {portal.company_type !== '民营' && (
+                        <span className="ml-1 text-accent">· {portal.company_type}</span>
+                      )}
                     </p>
                   </div>
                   <span
