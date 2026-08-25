@@ -23,6 +23,8 @@ import SettingsExport from './components/settings/SettingsExport';
 import SettingsImport from './components/settings/SettingsImport';
 import SettingsAPIKey from './components/settings/SettingsAPIKey';
 import SettingsProfile from './components/settings/SettingsProfile';
+import Schedule from './pages/Schedule';
+import CompanyPortals from './pages/CompanyPortals';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -126,6 +128,22 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Analytics />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/schedule"
+        element={
+          <ProtectedRoute>
+            <Schedule />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/company-portals"
+        element={
+          <ProtectedRoute>
+            <CompanyPortals />
           </ProtectedRoute>
         }
       />

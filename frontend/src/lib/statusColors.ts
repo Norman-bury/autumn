@@ -5,8 +5,10 @@ import type { ThemeColors } from '@/hooks/useThemeColors';
  * Default statuses use theme colors; custom user statuses keep their stored hex.
  */
 const STATUS_COLOR_MAP: Record<string, keyof ThemeColors> = {
+  Saved: 'gray',
   Applied: 'blueBright',
   Screening: 'yellowBright',
+  Assessment: 'yellowBright',
   Interviewing: 'orangeBright',
   Offer: 'greenBright',
   Accepted: 'aquaBright',

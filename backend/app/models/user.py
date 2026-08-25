@@ -54,3 +54,9 @@ class User(Base):
     api_keys = relationship(
         "UserAPIKey", back_populates="user", cascade="all, delete-orphan"
     )
+    recruitment_events = relationship(
+        "RecruitmentEvent", back_populates="user", cascade="all, delete-orphan"
+    )
+    company_portals = relationship(
+        "CompanyPortal", back_populates="user", cascade="all, delete-orphan"
+    )

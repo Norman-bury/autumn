@@ -1,4 +1,4 @@
-export const DEFAULT_THEME_ID = 'gruvbox-dark';
+export const DEFAULT_THEME_ID = 'career-workbench';
 export const STORAGE_KEY_ACCENTS = 'themeAccents';
 export const STORAGE_KEY_THEME = 'theme';
 

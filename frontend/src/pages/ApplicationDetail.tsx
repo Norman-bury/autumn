@@ -19,6 +19,12 @@ import HistoryViewer from '../components/application/HistoryViewer';
 import Layout from '../components/Layout';
 import EmptyState from '../components/EmptyState';
 import ApplicationModal from '../components/ApplicationModal';
+import RecruitmentEventForm from '../components/RecruitmentEventForm';
+import RecruitmentEventList from '../components/RecruitmentEventList';
+import {
+  priorityLabel,
+  statusLabel,
+} from '../lib/recruitmentLabels';
 
 export default function ApplicationDetail() {
   const { id } = useParams<{ id: string }>();
@@ -31,6 +37,7 @@ export default function ApplicationDetail() {
   const [showRoundForm, setShowRoundForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showEventForm, setShowEventForm] = useState(false);
 
   const loadApplication = useCallback(async () => {
     if (!id) return;
@@ -41,7 +48,7 @@ export default function ApplicationDetail() {
       const data = await getApplication(id!);
       setApplication(data);
     } catch {
-      const errorMsg = 'Failed to load application';
+      const errorMsg = '无法加载投递详情';
       setError(errorMsg);
       toast.error(errorMsg);
     } finally {
@@ -54,13 +61,13 @@ export default function ApplicationDetail() {
   }, [loadApplication]);
 
   async function handleDelete() {
-    if (!confirm('Are you sure you want to delete this application?')) return;
+    if (!confirm('确认删除这条投递记录？')) return;
     try {
       await deleteApplication(id!);
-      toast.success('Application deleted');
+      toast.success('投递记录已删除');
       navigate('/applications');
     } catch {
-      const errorMsg = 'Failed to delete application';
+      const errorMsg = '删除投递记录失败';
       setError(errorMsg);
       toast.error(errorMsg);
     }
@@ -71,14 +78,14 @@ export default function ApplicationDetail() {
   }
 
   async function handleDeleteRound(roundId: string) {
-    if (!confirm('Delete this round?')) return;
+    if (!confirm('确认删除本轮面试？')) return;
     try {
       await deleteRound(roundId);
 
       setApplication((prev) => removeApplicationRound(prev, roundId));
-      toast.success('Round deleted');
+      toast.success('面试记录已删除');
     } catch {
-      const errorMsg = 'Failed to delete round';
+      const errorMsg = '删除面试记录失败';
       setError(errorMsg);
       toast.error(errorMsg);
     }
@@ -106,7 +113,7 @@ export default function ApplicationDetail() {
         mergeApplicationRoundMedia(prev, updatedApplication, roundId)
       );
     } catch {
-      const errorMsg = 'Failed to refresh media';
+      const errorMsg = '刷新附件失败';
       setError(errorMsg);
       toast.error(errorMsg);
     }
@@ -126,7 +133,7 @@ export default function ApplicationDetail() {
     return (
       <Layout>
         <div className="flex items-center justify-center py-20">
-          <div className="text-muted">Loading...</div>
+          <div className="text-muted">正在加载...</div>
         </div>
       </Layout>
     );
@@ -136,7 +143,7 @@ export default function ApplicationDetail() {
     return (
       <Layout>
         <div className="flex items-center justify-center py-20">
-          <div className="text-red-bright">Application not found</div>
+          <div className="text-red-bright">未找到投递记录</div>
         </div>
       </Layout>
     );
@@ -150,7 +157,7 @@ export default function ApplicationDetail() {
             to="/applications"
             className="text-accent hover:text-accent-bright cursor-pointer transition-all duration-200 ease-in-out"
           >
-            &larr; Back to Applications
+            &larr; 返回投递记录
           </Link>
         </div>
 
@@ -204,25 +211,85 @@ export default function ApplicationDetail() {
                     ),
                   }}
                 />
-                {application.status.name}
+                {statusLabel(application.status.name)}
               </span>
             </div>
           </div>
 
           <div className="mb-4 grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
             <div>
-              <span className="text-muted">Applied:</span>
+              <span className="text-muted">投递日期：</span>
               <span className="text-primary ml-2">
                 {formatDate(application.applied_at)}
               </span>
             </div>
             <div>
-              <span className="text-muted">Updated:</span>
+              <span className="text-muted">最近更新：</span>
               <span className="text-primary ml-2">
                 {formatDateTime(application.updated_at)}
               </span>
             </div>
           </div>
+
+          <div className="border-tertiary mb-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y py-4 text-sm sm:grid-cols-4">
+            <div>
+              <p className="text-muted text-xs">招聘批次</p>
+              <p className="text-primary mt-1">
+                {application.recruitment_batch}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted text-xs">目标方向</p>
+              <p className="text-primary mt-1">
+                {application.target_track || '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted text-xs">公司规模</p>
+              <p className="text-primary mt-1">
+                {application.company_scale || '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted text-xs">优先级</p>
+              <p className="text-primary mt-1">
+                {priorityLabel(application.priority)}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted text-xs">投递截止</p>
+              <p className="text-primary mt-1">
+                {formatDate(application.deadline)}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted text-xs">投递渠道</p>
+              <p className="text-primary mt-1">
+                {application.application_channel || '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted text-xs">企业类型</p>
+              <p className="text-primary mt-1">
+                {application.company_type || '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted text-xs">内推信息</p>
+              <p className="text-primary mt-1">
+                {application.referral_code || '-'}
+              </p>
+            </div>
+          </div>
+
+          {application.notes && (
+            <div className="bg-bg2 mb-4 rounded-lg p-4">
+              <h3 className="text-muted mb-2 text-sm">投递备注</h3>
+              <p className="text-primary whitespace-pre-wrap">
+                {application.notes}
+              </p>
+            </div>
+          )}
 
           {application.job_url && (
             <div className="mb-4">
@@ -232,7 +299,7 @@ export default function ApplicationDetail() {
                 rel="noopener noreferrer"
                 className="text-accent hover:text-accent-bright cursor-pointer text-sm transition-all duration-200 ease-in-out"
               >
-                Open Job Page &rarr;
+                打开岗位页面 &rarr;
               </a>
             </div>
           )}
@@ -242,7 +309,7 @@ export default function ApplicationDetail() {
             <div className="bg-bg2 mb-4 rounded-lg p-4">
               <h3 className="text-muted mb-2 flex items-center gap-1.5 text-sm">
                 <i className="bi-file-text icon-sm"></i>
-                Description
+                岗位描述
               </h3>
               <div className="text-primary text-sm break-words whitespace-pre-wrap">
                 {application.job_description}
@@ -255,7 +322,7 @@ export default function ApplicationDetail() {
             <div className="bg-bg2 mb-4 rounded-lg p-4">
               <h3 className="text-muted mb-2 flex items-center gap-1.5 text-sm">
                 <i className="bi-currency-dollar icon-sm"></i>
-                Salary Range
+                薪资范围
               </h3>
               <p className="text-primary font-medium">
                 {application.salary_currency || 'USD'}{' '}
@@ -273,7 +340,7 @@ export default function ApplicationDetail() {
             <div className="bg-bg2 mb-4 rounded-lg p-4">
               <h3 className="text-muted mb-2 flex items-center gap-1.5 text-sm">
                 <i className="bi-person icon-sm"></i>
-                Recruiter
+                招聘联系人
               </h3>
               <div className="space-y-1">
                 {application.recruiter_name && (
@@ -294,7 +361,7 @@ export default function ApplicationDetail() {
                     className="text-accent hover:text-accent-bright flex cursor-pointer items-center gap-1 text-sm transition-all duration-200 ease-in-out"
                   >
                     <i className="bi-linkedin icon-sm"></i>
-                    LinkedIn Profile
+                    打开联系页面
                   </a>
                 )}
               </div>
@@ -307,7 +374,7 @@ export default function ApplicationDetail() {
               <div className="bg-bg2 mb-4 rounded-lg p-4">
                 <h3 className="text-muted mb-2 flex items-center gap-1.5 text-sm">
                   <i className="bi-check-circle icon-sm"></i>
-                  Must-Have Requirements
+                  必备要求
                 </h3>
                 <ul className="text-primary list-inside list-disc space-y-1">
                   {application.requirements_must_have.map((req) => (
@@ -325,7 +392,7 @@ export default function ApplicationDetail() {
               <div className="bg-bg2 mb-4 rounded-lg p-4">
                 <h3 className="text-muted mb-2 flex items-center gap-1.5 text-sm">
                   <i className="bi-star icon-sm"></i>
-                  Nice-to-Have Requirements
+                  加分项
                 </h3>
                 <ul className="text-primary list-inside list-disc space-y-1">
                   {application.requirements_nice_to_have.map((req) => (
@@ -342,7 +409,7 @@ export default function ApplicationDetail() {
             <div className="bg-bg2 mb-4 rounded-lg p-4">
               <h3 className="text-muted mb-2 flex items-center gap-1.5 text-sm">
                 <i className="bi-lightning icon-sm"></i>
-                Skills
+                技能关键词
               </h3>
               <div className="flex flex-wrap gap-2">
                 {application.skills.map((skill) => (
@@ -363,7 +430,7 @@ export default function ApplicationDetail() {
             <div className="bg-bg2 mb-4 rounded-lg p-4">
               <h3 className="text-muted mb-2 flex items-center gap-1.5 text-sm">
                 <i className="bi-clock-history icon-sm"></i>
-                Experience Required
+                经验要求
               </h3>
               <p className="text-primary font-medium">
                 {application.years_experience_min ?? '?'}-
@@ -378,16 +445,54 @@ export default function ApplicationDetail() {
               className="text-fg1 hover:bg-bg2 hover:text-fg0 flex cursor-pointer items-center gap-1.5 rounded bg-transparent px-3 py-1.5 text-sm transition-all duration-200 ease-in-out"
             >
               <i className="bi-pencil icon-sm"></i>
-              Edit
+              编辑
             </button>
             <button
               onClick={handleDelete}
               className="text-red hover:bg-bg2 hover:text-red-bright flex cursor-pointer items-center gap-1.5 rounded bg-transparent px-3 py-1.5 text-sm transition-all duration-200 ease-in-out"
             >
               <i className="bi-trash icon-sm"></i>
-              Delete
+              删除
             </button>
           </div>
+        </div>
+
+        <div className="bg-secondary mb-6 rounded-lg p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-primary text-lg font-semibold">招聘流程</h2>
+              <p className="text-muted mt-1 text-xs">
+                笔试、测评、面试、体检、背调和签约统一记录
+              </p>
+            </div>
+            <button
+              onClick={() => setShowEventForm((visible) => !visible)}
+              className="bg-accent text-bg0 hover:bg-accent-bright inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium"
+            >
+              <i
+                className={`bi ${showEventForm ? 'bi-x-lg' : 'bi-plus-lg'}`}
+              />
+              {showEventForm ? '取消' : '新增节点'}
+            </button>
+          </div>
+
+          {showEventForm && (
+            <div className="mb-4">
+              <RecruitmentEventForm
+                applicationId={id!}
+                onSaved={() => {
+                  setShowEventForm(false);
+                  loadApplication();
+                }}
+                onCancel={() => setShowEventForm(false)}
+              />
+            </div>
+          )}
+
+          <RecruitmentEventList
+            events={application.recruitment_events || []}
+            onChange={loadApplication}
+          />
         </div>
 
         <div className="mb-6">
@@ -404,14 +509,15 @@ export default function ApplicationDetail() {
         <div className="bg-secondary rounded-lg p-6">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-primary text-lg font-semibold">
-              Interview Rounds
+              面试深度复盘
             </h2>
             {application.rounds && application.rounds.length > 0 && (
               <button
                 onClick={() => setShowRoundForm(true)}
                 className="bg-accent text-bg0 hover:bg-accent-bright cursor-pointer rounded-md px-4 py-2 font-medium transition-all duration-200 ease-in-out"
               >
-                Add Round
+                <i className="bi bi-plus-lg mr-2" />
+                新增面试
               </button>
             )}
           </div>
@@ -450,10 +556,10 @@ export default function ApplicationDetail() {
             </div>
           ) : !showRoundForm ? (
             <EmptyState
-              message="No interview rounds yet."
+              message="暂无面试复盘"
               icon="bi-calendar-x"
               action={{
-                label: 'Add Round',
+                label: '新增面试',
                 onClick: () => setShowRoundForm(true),
               }}
             />

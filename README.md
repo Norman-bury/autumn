@@ -1,3 +1,33 @@
+# 秋招进度台
+
+面向 2027 届秋招的个人、本机优先求职管理系统，当前默认画像为：
+
+- 城市：杭州
+- 方向：大模型评测、Agent 开发
+- 企业偏好：中型公司优先
+
+当前版本已经支持投递记录、招聘批次、任意流程事件、测评与面试日程、
+企业官方入口、材料管理、状态历史和数据导入导出。
+
+## 本机启动
+
+Windows PowerShell：
+
+```powershell
+.\start-local.ps1
+```
+
+然后打开 `http://localhost:5173`。首次进入时创建一个本机账户，业务数据存放在
+`data/autumn-recruitment.db`，上传文件存放在 `uploads/`。
+
+## 上游说明
+
+本项目基于 MIT 许可的
+[Tarnished](https://github.com/markoonakic/tarnished) 改造，上游远端保留为
+`upstream`，便于后续获取安全修复和基础能力更新。
+
+---
+
 # Tarnished
 
 Tarnished is a self-hosted job application tracker designed to help you manage every stage of your job search.

@@ -6,7 +6,7 @@ import re
 import tempfile
 import zipfile
 from contextlib import suppress
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 logger = logging.getLogger(__name__)
 
@@ -354,16 +354,19 @@ async def validate_zip_safety(zip_path: str) -> dict:
             # Check each file for path traversal and size limits
             for file_info in file_list:
                 # Check for path traversal attempts
-                file_path = Path(file_info.filename)
+                posix_path = PurePosixPath(file_info.filename)
+                windows_path = PureWindowsPath(file_info.filename)
 
-                # Reject absolute paths
-                if file_path.is_absolute():
+                # ZIP members use POSIX separators, but archives can still
+                # contain Windows drive or UNC paths. Check both path models
+                # so validation behaves consistently on every host OS.
+                if posix_path.is_absolute() or windows_path.is_absolute():
                     raise ValueError(
                         f"ZIP contains absolute path: {file_info.filename}"
                     )
 
                 # Reject paths with .. components
-                if ".." in file_path.parts:
+                if ".." in posix_path.parts or ".." in windows_path.parts:
                     raise ValueError(
                         f"ZIP contains path traversal attempt: {file_info.filename}"
                     )

@@ -40,6 +40,11 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 const THEMES: Theme[] = [
   {
+    id: 'career-workbench',
+    name: 'Career Workbench',
+    swatches: ['#f5f7f9', '#1f2933', '#18794e', '#175cd3', '#b42318'],
+  },
+  {
     id: 'gruvbox-dark',
     name: 'Gruvbox Dark',
     swatches: ['#282828', '#ebdbb2', '#8ec07c', '#b8bb26', '#fb4934'],

@@ -1,179 +1,237 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { listApplications } from '../lib/applications';
-import Layout from '../components/Layout';
-import ActivityHeatmap from '../components/ActivityHeatmap';
-import EmptyState from '../components/EmptyState';
-import FlameEmblem from '../components/dashboard/FlameEmblem';
-import KPICards from '../components/dashboard/KPICards';
-import NeedsAttention from '../components/dashboard/NeedsAttention';
-import ImportModal from '../components/ImportModal';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+
 import ApplicationModal from '../components/ApplicationModal';
-import {
-  hasSeenImportPrompt,
-  markImportPromptSeen,
-} from '../lib/dashboardPrompt';
-import { useUserPreferences } from '@/hooks/useUserPreferences';
+import Layout from '../components/Layout';
+import RecruitmentEventList from '../components/RecruitmentEventList';
+import { listApplications } from '../lib/applications';
+import { listRecruitmentEvents } from '../lib/recruitment';
+import { priorityLabel, statusLabel } from '../lib/recruitmentLabels';
+import type { Application, RecruitmentEvent } from '../lib/types';
+
+const TERMINAL_STATUSES = new Set([
+  'Accepted',
+  'Rejected',
+  'Withdrawn',
+  'No Reply',
+]);
 
 export default function Dashboard() {
-  useAuth();
   const navigate = useNavigate();
-  const [totalApplications, setTotalApplications] = useState(0);
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [events, setEvents] = useState<RecruitmentEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showImportPrompt, setShowImportPrompt] = useState(false);
-  const [showImportModal, setShowImportModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const { data: preferences } = useUserPreferences();
 
-  const hasLoadedPreferences = preferences !== undefined;
-  const showStreakStats = hasLoadedPreferences && preferences.show_streak_stats;
-  const showNeedsAttention =
-    hasLoadedPreferences && preferences.show_needs_attention;
-  const showHeatmap = hasLoadedPreferences && preferences.show_heatmap;
+  async function loadDashboard() {
+    setLoading(true);
+    try {
+      const [applicationData, eventData] = await Promise.all([
+        listApplications({ page: 1, per_page: 100 }),
+        listRecruitmentEvents({ status: 'pending' }),
+      ]);
+      setApplications(applicationData.items);
+      setEvents(eventData);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    async function loadTotalApplications() {
-      try {
-        const data = await listApplications({ page: 1, per_page: 1 });
-        setTotalApplications(data.total);
-
-        // Show import prompt if no applications and user hasn't dismissed it
-        if (data.total === 0 && !hasSeenImportPrompt()) {
-          setShowImportPrompt(true);
-        }
-      } catch {
-        setShowImportPrompt(false);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadTotalApplications();
+    loadDashboard();
   }, []);
 
-  if (loading) return null;
+  const metrics = useMemo(() => {
+    const active = applications.filter(
+      (application) => !TERMINAL_STATUSES.has(application.status.name)
+    ).length;
+    const assessments = events.filter((event) =>
+      ['assessment', 'written_test'].includes(event.event_type)
+    ).length;
+    const interviews = events.filter((event) =>
+      ['interview', 'hr_interview'].includes(event.event_type)
+    ).length;
+    const offers = applications.filter((application) =>
+      ['Offer', 'Accepted'].includes(application.status.name)
+    ).length;
 
-  const handleDismissPrompt = () => {
-    markImportPromptSeen();
-    setShowImportPrompt(false);
-  };
+    return { active, assessments, interviews, offers };
+  }, [applications, events]);
 
-  const handleOpenImportModal = () => {
-    setShowImportPrompt(false);
-    setShowImportModal(true);
-  };
+  const upcomingEvents = useMemo(() => {
+    const now = Date.now();
+    return events
+      .filter((event) => {
+        const time = event.scheduled_at || event.deadline_at;
+        return time && new Date(time).getTime() >= now;
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.scheduled_at || a.deadline_at || 0).getTime();
+        const bTime = new Date(b.scheduled_at || b.deadline_at || 0).getTime();
+        return aTime - bTime;
+      })
+      .slice(0, 5);
+  }, [events]);
 
-  const handleCloseImportModal = () => {
-    setShowImportModal(false);
-  };
-
-  const handleImportSuccess = () => {
-    markImportPromptSeen();
-    setShowImportModal(false);
-    setShowImportPrompt(false);
-    setTotalApplications((count) => (count === 0 ? 1 : count));
-    navigate('/applications');
-  };
+  const priorityApplications = applications
+    .filter(
+      (application) =>
+        application.priority === 'high' &&
+        !TERMINAL_STATUSES.has(application.status.name)
+    )
+    .slice(0, 5);
 
   return (
     <Layout>
       <div className="mx-auto max-w-6xl px-4 py-8">
-        {showImportPrompt && totalApplications === 0 && (
-          <div className="bg-accent/20 border-accent text-primary mb-6 rounded-lg border px-6 py-4">
-            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-              <div>
-                <h3 className="mb-1 font-semibold">Welcome! 👋</h3>
-                <p className="text-sm">
-                  Do you have data from a previous export? You can import it to
-                  get started.
-                </p>
-              </div>
-              <div className="flex flex-shrink-0 gap-3">
-                <button
-                  onClick={handleDismissPrompt}
-                  className="text-fg1 hover:bg-bg2 hover:text-fg0 cursor-pointer rounded-md bg-transparent px-4 py-2 font-medium transition-all duration-200 ease-in-out"
-                >
-                  Skip
-                </button>
-                <button
-                  onClick={handleOpenImportModal}
-                  className="bg-accent text-bg0 hover:bg-accent-bright cursor-pointer rounded-md px-4 py-2 font-medium transition-all duration-200 ease-in-out"
-                >
-                  Import Data
-                </button>
-              </div>
-            </div>
+        <header className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <div>
+            <p className="text-accent mb-2 text-sm font-semibold">
+              2027 届秋招 · 杭州
+            </p>
+            <h1 className="text-primary text-2xl font-bold">秋招总览</h1>
+            <p className="text-secondary mt-2">
+              目标方向：大模型评测、Agent 开发 · 中型公司优先
+            </p>
           </div>
-        )}
-        {totalApplications === 0 ? (
-          <EmptyState
-            message="Welcome! Add your first job application to get started."
-            icon="bi-plus-circle"
-            action={{
-              label: 'Add Application',
-              onClick: () => setShowCreateModal(true),
-            }}
-          />
-        ) : (
-          <>
-            <h1 className="text-primary mb-6 text-2xl font-bold">Dashboard</h1>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="bg-accent text-bg0 hover:bg-accent-bright inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 font-medium"
+          >
+            <i className="bi bi-plus-lg" />
+            新增投递
+          </button>
+        </header>
 
-            {showStreakStats && <FlameEmblem />}
-
-            <KPICards />
-
-            {/* Quick Actions - single layer cards using inline-block (no flex) to avoid Firefox animation bug */}
-            <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-3">
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="bg-secondary hover:bg-bg2 cursor-pointer rounded-lg p-4 text-left transition-[translate,background-color] duration-200 ease-in-out will-change-transform hover:-translate-y-0.5"
-              >
-                <i className="bi bi-plus-lg text-accent icon-xl align-middle"></i>
-                <span className="text-fg1 ml-3 align-middle font-medium">
-                  New Application
-                </span>
-              </button>
-              <button
-                onClick={() => navigate('/analytics')}
-                className="bg-secondary hover:bg-bg2 cursor-pointer rounded-lg p-4 text-left transition-[translate,background-color] duration-200 ease-in-out will-change-transform hover:-translate-y-0.5"
-              >
-                <i className="bi bi-graph-up text-accent icon-xl align-middle"></i>
-                <span className="text-fg1 ml-3 align-middle font-medium">
-                  View Analytics
-                </span>
-              </button>
-              <button
-                onClick={() => navigate('/applications')}
-                className="bg-secondary hover:bg-bg2 cursor-pointer rounded-lg p-4 text-left transition-[translate,background-color] duration-200 ease-in-out will-change-transform hover:-translate-y-0.5"
-              >
-                <i className="bi bi-list-ul text-accent icon-xl align-middle"></i>
-                <span className="text-fg1 ml-3 align-middle font-medium">
-                  View Applications
-                </span>
-              </button>
+        <section className="mb-7 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            ['进行中', metrics.active, 'bi-briefcase', 'text-blue-bright'],
+            ['待测评', metrics.assessments, 'bi-clipboard-check', 'text-yellow-bright'],
+            ['待面试', metrics.interviews, 'bi-people', 'text-orange-bright'],
+            ['Offer', metrics.offers, 'bi-award', 'text-green-bright'],
+          ].map(([label, value, icon, color]) => (
+            <div
+              key={String(label)}
+              className="border-tertiary bg-secondary rounded-lg border p-4"
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-muted text-sm">{label}</span>
+                <i className={`bi ${icon} ${color} icon-md`} />
+              </div>
+              <div className="text-primary text-2xl font-bold">
+                {loading ? '-' : value}
+              </div>
             </div>
+          ))}
+        </section>
 
-            {showNeedsAttention && <NeedsAttention />}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+          <section className="bg-secondary rounded-lg px-5">
+            <div className="border-tertiary flex items-center justify-between border-b py-4">
+              <div>
+                <h2 className="text-primary text-base font-semibold">
+                  最近节点
+                </h2>
+                <p className="text-muted mt-1 text-xs">按计划时间升序</p>
+              </div>
+              <Link
+                to="/schedule"
+                className="text-accent hover:text-accent-bright text-sm"
+              >
+                全部日程
+              </Link>
+            </div>
+            <RecruitmentEventList
+              events={upcomingEvents}
+              showApplication
+              onChange={loadDashboard}
+            />
+          </section>
 
-            {showHeatmap && (
-              <div className="bg-secondary rounded-lg p-6">
-                <div className="mb-4 flex items-center justify-between">
-                  <h2 className="text-primary text-lg font-semibold">
-                    Activity Overview
-                  </h2>
-                </div>
-                <ActivityHeatmap />
+          <section className="bg-secondary rounded-lg px-5">
+            <div className="border-tertiary flex items-center justify-between border-b py-4">
+              <div>
+                <h2 className="text-primary text-base font-semibold">
+                  重点投递
+                </h2>
+                <p className="text-muted mt-1 text-xs">优先级为重点且未结束</p>
+              </div>
+              <Link
+                to="/applications"
+                className="text-accent hover:text-accent-bright text-sm"
+              >
+                全部记录
+              </Link>
+            </div>
+            {priorityApplications.length > 0 ? (
+              <div className="divide-tertiary divide-y">
+                {priorityApplications.map((application) => (
+                  <Link
+                    key={application.id}
+                    to={`/applications/${application.id}`}
+                    className="hover:bg-bg2 -mx-2 flex items-center justify-between gap-3 px-2 py-4"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-primary truncate font-medium">
+                        {application.company}
+                      </p>
+                      <p className="text-secondary mt-1 truncate text-sm">
+                        {application.job_title}
+                      </p>
+                    </div>
+                    <div className="flex-shrink-0 text-right">
+                      <p className="text-accent text-sm">
+                        {statusLabel(application.status.name)}
+                      </p>
+                      <p className="text-muted mt-1 text-xs">
+                        {priorityLabel(application.priority)}
+                      </p>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <div className="text-muted py-10 text-center text-sm">
+                暂无重点投递
               </div>
             )}
-          </>
-        )}
+          </section>
+        </div>
+
+        <section className="border-tertiary mt-6 grid grid-cols-1 gap-0 overflow-hidden rounded-lg border md:grid-cols-3">
+          <Link
+            to="/company-portals"
+            className="bg-bg1 hover:bg-bg2 border-tertiary flex items-center gap-3 border-b p-5 md:border-r md:border-b-0"
+          >
+            <i className="bi bi-building text-blue-bright icon-lg" />
+            <div>
+              <p className="text-primary font-medium">杭州企业入口</p>
+              <p className="text-muted mt-1 text-xs">已核验的中型 AI 公司</p>
+            </div>
+          </Link>
+          <Link
+            to="/applications"
+            className="bg-bg1 hover:bg-bg2 border-tertiary flex items-center gap-3 border-b p-5 md:border-r md:border-b-0"
+          >
+            <i className="bi bi-table text-yellow-bright icon-lg" />
+            <div>
+              <p className="text-primary font-medium">投递记录</p>
+              <p className="text-muted mt-1 text-xs">筛选、排序与状态维护</p>
+            </div>
+          </Link>
+          <Link
+            to="/schedule"
+            className="bg-bg1 hover:bg-bg2 flex items-center gap-3 p-5"
+          >
+            <i className="bi bi-calendar3 text-green-bright icon-lg" />
+            <div>
+              <p className="text-primary font-medium">流程日程</p>
+              <p className="text-muted mt-1 text-xs">测评、面试和截止提醒</p>
+            </div>
+          </Link>
+        </section>
       </div>
-      <ImportModal
-        isOpen={showImportModal}
-        onClose={handleCloseImportModal}
-        onSuccess={handleImportSuccess}
-      />
+
       <ApplicationModal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}

@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:5174"
     app_url: str = "http://localhost:5577"
     trusted_hosts: str = ""
+    single_user_mode: bool = False
 
     def get_database_url(self) -> str:
         """Build database URL with proper encoding.

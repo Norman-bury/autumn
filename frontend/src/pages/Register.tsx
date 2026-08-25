@@ -21,7 +21,7 @@ export default function Register() {
     setError('');
 
     if (password !== confirmPassword) {
-      setError('Passwords do not match');
+      setError('两次输入的密码不一致');
       return;
     }
 
@@ -35,8 +35,8 @@ export default function Register() {
     } catch (err: unknown) {
       setError(
         axios.isAxiosError(err)
-          ? err.response?.data?.detail || 'Registration failed'
-          : 'Registration failed'
+          ? err.response?.data?.detail || '创建账户失败'
+          : '创建账户失败'
       );
     } finally {
       setLoading(false);
@@ -47,7 +47,7 @@ export default function Register() {
     <div className="flex min-h-screen items-center justify-center p-4">
       <div className="bg-secondary w-full max-w-md rounded-lg p-8">
         <h1 className="text-accent-bright mb-6 text-2xl font-bold">
-          {isSetupMode ? 'Create Admin Account' : 'Create Account'}
+          {isSetupMode ? '初始化本机账户' : '创建账户'}
         </h1>
 
         {error && (
@@ -62,7 +62,7 @@ export default function Register() {
               htmlFor="email"
               className="text-muted mb-1 block text-sm font-semibold"
             >
-              Email
+              邮箱
             </label>
             <input
               id="email"
@@ -78,7 +78,7 @@ export default function Register() {
           <PasswordInput
             value={password}
             onChange={setPassword}
-            label="Password"
+            label="密码"
             required
             autoComplete="new-password"
           />
@@ -86,7 +86,7 @@ export default function Register() {
           <PasswordInput
             value={confirmPassword}
             onChange={setConfirmPassword}
-            label="Confirm Password"
+            label="确认密码"
             required
             autoComplete="new-password"
           />
@@ -96,22 +96,18 @@ export default function Register() {
             disabled={loading}
             className="bg-accent text-bg0 hover:bg-accent-bright w-full cursor-pointer rounded-md px-4 py-2 font-medium transition-all duration-200 ease-in-out disabled:opacity-50"
           >
-            {loading
-              ? 'Creating account...'
-              : isSetupMode
-                ? 'Create Admin Account'
-                : 'Create Account'}
+            {loading ? '创建中...' : isSetupMode ? '开始使用' : '创建账户'}
           </button>
         </form>
 
         {!isSetupMode && (
           <p className="text-muted mt-4 text-center">
-            Already have an account?{' '}
+            已有账户？{' '}
             <Link
               to="/login"
               className="text-accent hover:text-accent-bright transition-all duration-200 ease-in-out"
             >
-              Sign in
+              登录
             </Link>
           </p>
         )}

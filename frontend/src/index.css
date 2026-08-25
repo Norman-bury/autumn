@@ -180,7 +180,8 @@ body {
   margin: 0;
   background-color: var(--bg0);
   color: var(--fg1);
-  font-family: var(--font-mono);
+  font-family:
+    var(--font-display), 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
   font-size: var(--font-base);
   line-height: 1.5;
 }

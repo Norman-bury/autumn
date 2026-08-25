@@ -69,6 +69,17 @@ export interface Application {
   years_experience_min: number | null;
   years_experience_max: number | null;
   source: string | null;
+  recruitment_cycle: string;
+  recruitment_batch: string;
+  target_track: string | null;
+  company_type: string | null;
+  company_scale: string | null;
+  priority: 'high' | 'medium' | 'low';
+  deadline: string | null;
+  application_channel: string | null;
+  referral_code: string | null;
+  notes: string | null;
+  recruitment_events?: RecruitmentEvent[];
 }
 
 export interface ApplicationListResponse {
@@ -98,6 +109,16 @@ export interface ApplicationCreate {
   years_experience_min?: number | null;
   years_experience_max?: number | null;
   source?: string;
+  recruitment_cycle?: string;
+  recruitment_batch?: string;
+  target_track?: string;
+  company_type?: string;
+  company_scale?: string;
+  priority?: 'high' | 'medium' | 'low';
+  deadline?: string | null;
+  application_channel?: string;
+  referral_code?: string;
+  notes?: string;
 }
 
 export interface ApplicationUpdate {
@@ -120,6 +141,94 @@ export interface ApplicationUpdate {
   years_experience_min?: number | null;
   years_experience_max?: number | null;
   source?: string | null;
+  recruitment_cycle?: string | null;
+  recruitment_batch?: string | null;
+  target_track?: string | null;
+  company_type?: string | null;
+  company_scale?: string | null;
+  priority?: 'high' | 'medium' | 'low' | null;
+  deadline?: string | null;
+  application_channel?: string | null;
+  referral_code?: string | null;
+  notes?: string | null;
+}
+
+export type RecruitmentEventType =
+  | 'application'
+  | 'written_test'
+  | 'assessment'
+  | 'interview'
+  | 'hr_interview'
+  | 'medical'
+  | 'background_check'
+  | 'offer'
+  | 'signing'
+  | 'follow_up'
+  | 'other';
+
+export type RecruitmentEventStatus =
+  | 'pending'
+  | 'completed'
+  | 'cancelled'
+  | 'missed';
+
+export interface RecruitmentEvent {
+  id: string;
+  application_id: string;
+  event_type: RecruitmentEventType;
+  title: string;
+  status: RecruitmentEventStatus;
+  scheduled_at: string | null;
+  deadline_at: string | null;
+  result: string | null;
+  link: string | null;
+  location: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  company?: string;
+  job_title?: string;
+}
+
+export interface RecruitmentEventCreate {
+  application_id: string;
+  event_type: RecruitmentEventType;
+  title: string;
+  status?: RecruitmentEventStatus;
+  scheduled_at?: string | null;
+  deadline_at?: string | null;
+  result?: string | null;
+  link?: string | null;
+  location?: string | null;
+  notes?: string | null;
+}
+
+export interface CompanyPortal {
+  id: string;
+  user_id: string | null;
+  company_name: string;
+  company_type: string;
+  company_scale: string;
+  industry: string;
+  city: string;
+  careers_url: string;
+  campus_url: string | null;
+  focus_roles: string[];
+  recruitment_cycle: string;
+  recruitment_status:
+    | 'open'
+    | 'closing_soon'
+    | 'rolling'
+    | 'closed'
+    | 'needs_review';
+  application_deadline: string | null;
+  verification_status: 'verified' | 'needs_review' | 'expired';
+  verified_at: string | null;
+  evidence_url: string | null;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RoundCreate {

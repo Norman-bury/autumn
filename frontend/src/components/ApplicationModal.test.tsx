@@ -40,7 +40,7 @@ describe('ApplicationModal', () => {
 
     render(<ApplicationModal isOpen onClose={vi.fn()} onSuccess={vi.fn()} />);
 
-    const companyInput = screen.getByLabelText(/company/i);
+    const companyInput = screen.getByRole('textbox', { name: /公司/i });
     fireEvent.change(companyInput, { target: { value: 'Acme' } });
 
     expect(companyInput).toHaveValue('Acme');
@@ -55,8 +55,8 @@ describe('ApplicationModal', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole('combobox', { name: /status/i })
-      ).toHaveTextContent('Applied')
+        screen.getByRole('combobox', { name: /当前阶段/i })
+      ).toHaveTextContent('已投递')
     );
 
     expect(companyInput).toHaveValue('Acme');

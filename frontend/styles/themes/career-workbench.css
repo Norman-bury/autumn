@@ -1,0 +1,36 @@
+[data-theme='career-workbench'] {
+  --bg0-hard: #eef1f4;
+  --bg0: #f5f7f9;
+  --bg0-soft: #ffffff;
+  --bg1: #ffffff;
+  --bg2: #edf1f4;
+  --bg3: #dfe5ea;
+  --bg4: #c4cdd5;
+  --bg-h: #a7b3bd;
+
+  --fg0: #111827;
+  --fg1: #1f2933;
+  --fg2: #34414d;
+  --fg3: #53616d;
+  --fg4: #6b7783;
+  --gray: #7a8792;
+
+  --red: #b42318;
+  --green: #18794e;
+  --yellow: #9a6700;
+  --blue: #175cd3;
+  --purple: #6941c6;
+  --aqua: #087e8b;
+  --orange: #b54708;
+
+  --red-bright: #d92d20;
+  --green-bright: #21875b;
+  --yellow-bright: #b7791f;
+  --blue-bright: #2563eb;
+  --purple-bright: #7f56d9;
+  --aqua-bright: #0e8795;
+  --orange-bright: #c45d13;
+
+  --accent: var(--green);
+  --accent-bright: var(--green-bright);
+}

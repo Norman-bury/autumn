@@ -1,5 +1,8 @@
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -26,6 +29,42 @@ from app.schemas.auth import (
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
+
+
+@router.post("/local-session", response_model=Token)
+async def create_local_session(db: AsyncSession = Depends(get_db)) -> Token:
+    if not settings.single_user_mode:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Local single-user mode is disabled",
+        )
+
+    result = await db.execute(
+        select(User).where(User.is_active.is_(True)).order_by(User.created_at.asc())
+    )
+    user = result.scalars().first()
+    if user is None:
+        user = User(
+            email="local@autumn-tracker.local",
+            password_hash=get_password_hash(secrets.token_urlsafe(32)),
+            is_admin=True,
+            is_active=True,
+        )
+        db.add(user)
+        try:
+            await db.commit()
+            await db.refresh(user)
+        except IntegrityError:
+            await db.rollback()
+            result = await db.execute(
+                select(User).where(User.email == "local@autumn-tracker.local")
+            )
+            user = result.scalar_one()
+
+    return Token(
+        access_token=create_access_token({"sub": user.id}),
+        refresh_token=create_refresh_token({"sub": user.id}),
+    )
 
 
 @router.post(
@@ -153,4 +192,7 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
     """Check if the application needs initial setup (no users exist)."""
     result = await db.execute(select(User))
     has_users = result.scalars().first() is not None
-    return {"needs_setup": not has_users}
+    return {
+        "needs_setup": not has_users and not settings.single_user_mode,
+        "single_user_mode": settings.single_user_mode,
+    }

@@ -61,6 +61,17 @@ function createApplication(rounds: Round[] = []): Application {
     years_experience_min: null,
     years_experience_max: null,
     source: null,
+    recruitment_cycle: '2027届秋招',
+    recruitment_batch: '正式批',
+    target_track: 'Agent 开发',
+    company_type: '民营',
+    company_scale: '中型',
+    priority: 'medium',
+    deadline: null,
+    application_channel: null,
+    referral_code: null,
+    notes: null,
+    recruitment_events: [],
   };
 }
 

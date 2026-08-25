@@ -3,6 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.schemas.recruitment import RecruitmentEventResponse
 from app.schemas.round import RoundResponse
 
 
@@ -37,6 +38,16 @@ class ApplicationCreate(BaseModel):
     years_experience_min: int | None = None
     years_experience_max: int | None = None
     source: str | None = None
+    recruitment_cycle: str = "2027届秋招"
+    recruitment_batch: str = "正式批"
+    target_track: str | None = None
+    company_type: str | None = None
+    company_scale: str | None = None
+    priority: str = "medium"
+    deadline: date | None = None
+    application_channel: str | None = None
+    referral_code: str | None = None
+    notes: str | None = None
 
 
 class ApplicationUpdate(BaseModel):
@@ -60,6 +71,16 @@ class ApplicationUpdate(BaseModel):
     years_experience_min: int | None = None
     years_experience_max: int | None = None
     source: str | None = None
+    recruitment_cycle: str | None = None
+    recruitment_batch: str | None = None
+    target_track: str | None = None
+    company_type: str | None = None
+    company_scale: str | None = None
+    priority: str | None = None
+    deadline: date | None = None
+    application_channel: str | None = None
+    referral_code: str | None = None
+    notes: str | None = None
 
 
 class StatusResponse(BaseModel):
@@ -99,6 +120,16 @@ class ApplicationListItem(BaseModel):
     years_experience_min: int | None
     years_experience_max: int | None
     source: str | None
+    recruitment_cycle: str
+    recruitment_batch: str
+    target_track: str | None
+    company_type: str | None
+    company_scale: str | None
+    priority: str
+    deadline: date | None
+    application_channel: str | None
+    referral_code: str | None
+    notes: str | None
 
     @field_validator(
         "requirements_must_have", "requirements_nice_to_have", "skills", mode="before"
@@ -115,6 +146,7 @@ class ApplicationResponse(ApplicationListItem):
     model_config = ConfigDict(from_attributes=True)
 
     rounds: list[RoundResponse] = []
+    recruitment_events: list[RecruitmentEventResponse] = []
 
 
 class ApplicationListResponse(BaseModel):

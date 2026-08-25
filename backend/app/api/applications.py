@@ -181,6 +181,16 @@ async def create_application(
         years_experience_min=data.years_experience_min,
         years_experience_max=data.years_experience_max,
         source=data.source,
+        recruitment_cycle=data.recruitment_cycle,
+        recruitment_batch=data.recruitment_batch,
+        target_track=data.target_track,
+        company_type=data.company_type,
+        company_scale=data.company_scale,
+        priority=data.priority,
+        deadline=data.deadline,
+        application_channel=data.application_channel,
+        referral_code=data.referral_code,
+        notes=data.notes,
     )
     db.add(application)
     await db.flush()  # Get the generated ID
@@ -360,6 +370,7 @@ async def get_application(
             selectinload(Application.status),
             selectinload(Application.rounds).selectinload(Round.round_type),
             selectinload(Application.rounds).selectinload(Round.media),
+            selectinload(Application.recruitment_events),
         )
     )
     application = result.scalars().first()

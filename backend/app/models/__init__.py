@@ -1,6 +1,8 @@
 from app.models.application import Application, ApplicationStatusHistory
 from app.models.audit_log import AuditLog
+from app.models.company_portal import CompanyPortal
 from app.models.job_lead import JobLead
+from app.models.recruitment_event import RecruitmentEvent
 from app.models.round import MediaType, Round, RoundMedia
 from app.models.round_type import RoundType
 from app.models.status import ApplicationStatus
@@ -21,7 +23,9 @@ __all__ = [
     "RoundMedia",
     "MediaType",
     "AuditLog",
+    "CompanyPortal",
     "JobLead",
+    "RecruitmentEvent",
     "UserProfile",
     "SystemSettings",
     "TransferJob",

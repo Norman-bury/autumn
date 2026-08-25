@@ -109,6 +109,24 @@ class Application(Base):
     years_experience_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
     years_experience_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    recruitment_cycle: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="2027届秋招"
+    )
+    recruitment_batch: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="正式批"
+    )
+    target_track: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    company_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    company_scale: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    priority: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="medium"
+    )
+    deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
+    application_channel: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    referral_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user = relationship("User", back_populates="applications")
     status = relationship("ApplicationStatus", back_populates="applications")
@@ -120,6 +138,12 @@ class Application(Base):
         back_populates="application",
         cascade="all, delete-orphan",
         order_by="desc(ApplicationStatusHistory.changed_at)",
+    )
+    recruitment_events = relationship(
+        "RecruitmentEvent",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="RecruitmentEvent.scheduled_at",
     )
     # The job lead this application was created from (via job_lead_id FK)
     job_lead = relationship("JobLead", foreign_keys=[job_lead_id])

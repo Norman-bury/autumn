@@ -8,6 +8,10 @@ import type { Application, Status } from '../lib/types';
 import { getStatusColor } from '../lib/statusColors';
 import { useThemeColors } from '../hooks/useThemeColors';
 import { useToastContext } from '../contexts/ToastContext';
+import {
+  priorityLabel,
+  statusLabel,
+} from '../lib/recruitmentLabels';
 import Layout from '../components/Layout';
 import Dropdown from '../components/Dropdown';
 import Loading from '../components/Loading';
@@ -57,7 +61,7 @@ export default function Applications() {
       setApplications(data.items);
       setTotal(data.total);
     } catch {
-      const errorMsg = 'Failed to load applications';
+      const errorMsg = '无法加载投递记录';
       setError(errorMsg);
       toast.error(errorMsg);
     } finally {
@@ -114,12 +118,18 @@ export default function Applications() {
     <Layout>
       <div className="mx-auto max-w-6xl px-4 py-8">
         <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-          <h1 className="text-primary text-2xl font-bold">Applications</h1>
+          <div>
+            <p className="text-accent mb-2 text-sm font-semibold">
+              2027 届秋招
+            </p>
+            <h1 className="text-primary text-2xl font-bold">投递记录</h1>
+          </div>
           <button
             onClick={() => setShowCreateModal(true)}
             className="bg-accent text-bg0 hover:bg-accent-bright cursor-pointer rounded-md px-4 py-2 font-medium transition-all duration-200 ease-in-out"
           >
-            New Application
+            <i className="bi bi-plus-lg mr-2" />
+            新增投递
           </button>
         </div>
 
@@ -130,7 +140,7 @@ export default function Applications() {
               <i className="bi-search icon-sm text-muted absolute top-1/2 left-3 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder="Search company or job title..."
+                placeholder="搜索公司或岗位"
                 value={search}
                 onChange={(e) => updateParams({ search: e.target.value })}
                 className="bg-bg2 text-fg1 placeholder-muted focus:ring-accent-bright w-full rounded py-2 pr-9 pl-9 transition-all duration-200 ease-in-out focus:ring-1 focus:outline-none"
@@ -150,21 +160,21 @@ export default function Applications() {
             <div className="flex flex-wrap items-center gap-3">
               <Dropdown
                 options={[
-                  { value: '', label: 'All Statuses' },
+                  { value: '', label: '全部阶段' },
                   ...statuses.map((status) => ({
                     value: status.id,
-                    label: status.name,
+                    label: statusLabel(status.name),
                   })),
                 ]}
                 value={statusFilter}
                 onChange={(value) => updateParams({ status: value })}
-                placeholder="All Statuses"
+                placeholder="全部阶段"
                 size="xs"
                 containerBackground="bg1"
               />
               <Dropdown
                 options={[
-                  { value: '', label: 'All Sources' },
+                  { value: '', label: '全部来源' },
                   ...sources.map((source) => ({
                     value: source,
                     label: source,
@@ -172,7 +182,7 @@ export default function Applications() {
                 ]}
                 value={sourceFilter}
                 onChange={(value) => updateParams({ source: value })}
-                placeholder="All Sources"
+                placeholder="全部来源"
                 size="xs"
                 containerBackground="bg1"
                 disabled={sources.length === 0}
@@ -204,20 +214,20 @@ export default function Applications() {
         )}
 
         {loading ? (
-          <Loading message="Loading applications..." />
+          <Loading message="正在加载投递记录..." />
         ) : applications.length === 0 ? (
           isFiltered ? (
             <EmptyState
-              message="No applications match your search or filters."
-              subMessage="Try different keywords or clear filters."
+              message="没有符合筛选条件的投递"
+              subMessage="调整关键词或清除筛选条件"
               icon="bi-search"
             />
           ) : (
             <EmptyState
-              message="No applications yet. Add your first application to get started."
+              message="还没有投递记录"
               icon="bi-inbox"
               action={{
-                label: 'Add Application',
+                label: '新增投递',
                 onClick: () => setShowCreateModal(true),
               }}
             />
@@ -230,19 +240,19 @@ export default function Applications() {
                 <thead>
                   <tr className="border-tertiary border-b">
                     <th className="text-muted px-4 py-3 text-left text-xs font-bold tracking-wide uppercase">
-                      Company
+                      公司
                     </th>
                     <th className="text-muted px-4 py-3 text-left text-xs font-bold tracking-wide uppercase">
-                      Position
+                      岗位
                     </th>
                     <th className="text-muted px-4 py-3 text-left text-xs font-bold tracking-wide uppercase">
-                      Status
+                      阶段
                     </th>
                     <th className="text-muted px-4 py-3 text-left text-xs font-bold tracking-wide uppercase">
-                      Applied
+                      方向
                     </th>
                     <th className="text-muted px-4 py-3 text-left text-xs font-bold tracking-wide uppercase">
-                      Rounds
+                      截止日期
                     </th>
                   </tr>
                 </thead>
@@ -285,14 +295,14 @@ export default function Applications() {
                               ),
                             }}
                           />
-                          {app.status.name}
+                          {statusLabel(app.status.name)}
                         </span>
                       </td>
                       <td className="text-secondary px-4 py-3 text-sm">
-                        {formatDate(app.applied_at)}
+                        {app.target_track || '-'}
                       </td>
                       <td className="text-secondary px-4 py-3 text-sm">
-                        {app.rounds?.length || 0}
+                        {app.deadline ? formatDate(app.deadline) : '-'}
                       </td>
                     </tr>
                   ))}
@@ -333,15 +343,15 @@ export default function Applications() {
                           ),
                         }}
                       />
-                      {app.status.name}
+                      {statusLabel(app.status.name)}
                     </span>
                   </div>
                   <div className="text-primary mb-2 truncate text-sm">
                     {app.job_title}
                   </div>
                   <div className="text-secondary text-xs">
-                    {formatDate(app.applied_at)} · {app.rounds?.length || 0}{' '}
-                    rounds
+                    {app.target_track || '方向未标注'} ·{' '}
+                    {priorityLabel(app.priority)}
                   </div>
                 </Link>
               ))}
