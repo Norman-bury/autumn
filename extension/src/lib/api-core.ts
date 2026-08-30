@@ -89,9 +89,55 @@ export interface UserProfileResponse {
   last_name: string | null;
   email: string | null;
   phone: string | null;
+  location?: string | null;
   city: string | null;
   country: string | null;
   linkedin_url: string | null;
+  github_url?: string | null;
+  portfolio_url?: string | null;
+  highest_degree?: string | null;
+  current_school?: string | null;
+  major?: string | null;
+  education_start_date?: string | null;
+  education_end_date?: string | null;
+  graduation_year?: string | null;
+  target_roles?: string[] | null;
+  preferred_locations?: string[] | null;
+  expected_salary?: string | null;
+  authorized_to_work?: string | null;
+  requires_sponsorship?: boolean | null;
+  skills?: string[] | null;
+  self_summary?: string | null;
+}
+
+export interface AutofillFieldPolicyResponse {
+  risk_level: 'safe' | 'sensitive' | 'never';
+  autofill_allowed: boolean;
+  reason?: string | null;
+}
+
+export interface UserProfileAutofillResponse {
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  city: string | null;
+  country: string | null;
+  linkedin_url: string | null;
+  github_url?: string | null;
+  portfolio_url?: string | null;
+  highest_degree?: string | null;
+  current_school?: string | null;
+  major?: string | null;
+  education_start_date?: string | null;
+  education_end_date?: string | null;
+  graduation_year?: string | null;
+  target_roles?: string[] | null;
+  preferred_locations?: string[] | null;
+  skills?: string[] | null;
+  self_summary?: string | null;
+  field_policies: Record<string, AutofillFieldPolicyResponse>;
+  never_guess: string[];
 }
 
 export interface ApplicationExtractRequest {
@@ -106,6 +152,7 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 export const API_ENDPOINTS = {
   JOB_LEADS: '/api/job-leads',
   PROFILE: '/api/profile',
+  PROFILE_AUTOFILL: '/api/profile/autofill',
   APPLICATIONS: '/api/applications',
   STATUSES: '/api/statuses',
 } as const;

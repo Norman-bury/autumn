@@ -11,7 +11,7 @@ import {
   updateActionIcon,
 } from './icon';
 import { buildActionIconPayload } from './icon-payload';
-import { getProfile } from '../lib/api';
+import { getAutofillProfile } from '../lib/api';
 import { hasAutofillData, type AutofillProfile } from '../lib/autofill';
 import { ThemeColors, UserSettings, DEFAULT_COLORS } from '../lib/theme';
 import {
@@ -147,9 +147,10 @@ async function loadAutoFillSetting(): Promise<void> {
 async function triggerAutoFill(tabId: number): Promise<void> {
   try {
     // Get user profile from backend
-    const profile = await getProfile();
+    const profile = await getAutofillProfile();
 
-    // Convert to AutofillProfile format
+    // Use the full safe profile shape supported by the autofill engine. The
+    // engine applies JobHuntBot safety policy and skips sensitive fields.
     const autofillProfile: AutofillProfile = {
       first_name: profile.first_name,
       last_name: profile.last_name,
@@ -158,6 +159,18 @@ async function triggerAutoFill(tabId: number): Promise<void> {
       city: profile.city,
       country: profile.country,
       linkedin_url: profile.linkedin_url,
+      github_url: profile.github_url,
+      portfolio_url: profile.portfolio_url,
+      highest_degree: profile.highest_degree,
+      current_school: profile.current_school,
+      major: profile.major,
+      education_start_date: profile.education_start_date,
+      education_end_date: profile.education_end_date,
+      graduation_year: profile.graduation_year,
+      target_roles: profile.target_roles,
+      preferred_locations: profile.preferred_locations,
+      skills: profile.skills,
+      self_summary: profile.self_summary,
     };
 
     // Check if profile has any autofill data

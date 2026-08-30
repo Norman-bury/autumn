@@ -154,7 +154,9 @@ def sanitize_filename(filename: str) -> str:
     return name
 
 
-async def store_file(content: bytes, upload_dir: Path) -> str:
+async def store_file(
+    content: bytes, upload_dir: Path, extension: str | None = None
+) -> str:
     """Store file with CAS naming, return relative path.
 
     Uses SHA-256 hash for filename to prevent collisions and enable deduplication.
@@ -162,12 +164,15 @@ async def store_file(content: bytes, upload_dir: Path) -> str:
     Args:
         content: Raw file bytes
         upload_dir: Directory to store the file in
+        extension: Trusted extension for internally generated files
 
     Returns:
         Relative path from project root (e.g., 'uploads/abc123...pdf')
     """
     file_hash = hashlib.sha256(content).hexdigest()
-    ext = detect_extension(content)
+    ext = extension or detect_extension(content)
+    if not re.fullmatch(r"\.[a-zA-Z0-9]{1,10}", ext):
+        raise ValueError("Invalid file extension")
     filename = f"{file_hash}{ext}"
     file_path = upload_dir / filename
 

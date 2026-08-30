@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models import Application, Round, RoundMedia
+from app.models import Application, Round, RoundMedia, TailoredResume, UserProfile
 
 CAS_BLOB_NAME_RE = re.compile(r"^[0-9a-f]{64}(?:\.[A-Za-z0-9]+)?$")
 
@@ -59,6 +59,27 @@ async def _collect_round_file_references(session: AsyncSession) -> set[str]:
     return references
 
 
+async def _collect_profile_file_references(session: AsyncSession) -> set[str]:
+    result = await session.execute(
+        select(UserProfile.resume_file_path, UserProfile.resume_versions)
+    )
+    references: set[str] = set()
+    for resume_file_path, resume_versions in result.all():
+        if resume_file_path:
+            references.add(resume_file_path)
+        for version in resume_versions or []:
+            if isinstance(version, dict) and version.get("file_path"):
+                references.add(version["file_path"])
+    return references
+
+
+async def _collect_tailored_resume_file_references(
+    session: AsyncSession,
+) -> set[str]:
+    result = await session.execute(select(TailoredResume.docx_path))
+    return {path for path in result.scalars().all() if path}
+
+
 def _resolve_stored_path(stored_path: str, upload_root: Path) -> Path:
     path = stored_path
     if path.startswith("./"):
@@ -79,6 +100,8 @@ async def collect_referenced_paths(
     root = (upload_root or Path(get_settings().upload_dir)).resolve()
     stored_paths = await _collect_application_file_references(session)
     stored_paths.update(await _collect_round_file_references(session))
+    stored_paths.update(await _collect_profile_file_references(session))
+    stored_paths.update(await _collect_tailored_resume_file_references(session))
 
     resolved_paths: set[Path] = set()
     for stored_path in stored_paths:

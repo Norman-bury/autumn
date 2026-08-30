@@ -14,7 +14,7 @@ import {
   checkExistingLead,
   checkExistingApplication,
   convertLeadToApplication,
-  getProfile,
+  getAutofillProfile,
   extractApplication,
   getStatuses,
   saveJobLead as saveJobLeadRequest,
@@ -206,12 +206,16 @@ const popupSaveLead = createPopupSaveLeadController({
 });
 const popupAutofill = createPopupAutofillController({
   deps: {
-    getProfile,
+    getProfile: getAutofillProfile,
     sendAutofillMessage: (tabId, profile) =>
       browser.tabs.sendMessage(tabId, {
         type: 'AUTOFILL_FORM',
         profile,
-      }) as Promise<{ filledCount?: number }>,
+      }) as Promise<{
+        filledCount?: number;
+        skippedCount?: number;
+        fields?: { filled: boolean; riskLevel?: 'safe' | 'sensitive' | 'never' }[];
+      }>,
     hasAutofillData,
   },
   state: {

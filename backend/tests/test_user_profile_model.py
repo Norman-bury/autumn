@@ -177,6 +177,14 @@ class TestUserProfileModelCreation:
                 "Kubernetes",
                 "GraphQL",
             ],
+            "resume_versions": [
+                {
+                    "file_path": "uploads/resume.pdf",
+                    "original_filename": "resume.pdf",
+                    "uploaded_at": "2026-08-29T00:00:00+00:00",
+                    "is_current": True,
+                }
+            ],
         }
 
         user_profile = UserProfile(**sample_data)
@@ -207,6 +215,7 @@ class TestUserProfileModelCreation:
             "Kubernetes",
             "GraphQL",
         ]
+        assert user_profile.resume_versions[0]["original_filename"] == "resume.pdf"
 
     async def test_create_user_profile_with_partial_extended_data(
         self, db: AsyncSession, test_user_for_profile: User

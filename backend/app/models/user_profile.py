@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, ForeignKey, String
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -29,6 +30,13 @@ class UserProfile(Base):
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    github_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    portfolio_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    highest_degree: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    graduation_year: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    target_roles: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    preferred_locations: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    expected_salary: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Work authorization
     authorized_to_work: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -38,6 +46,19 @@ class UserProfile(Base):
     work_history: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     education: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     skills: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    projects: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    certificates: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    languages: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    self_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Resume source and parsed raw text
+    resume_file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    resume_original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resume_versions: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    resume_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resume_parsed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Relationships
     user = relationship("User", back_populates="user_profile")

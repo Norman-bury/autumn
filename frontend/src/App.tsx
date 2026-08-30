@@ -22,10 +22,12 @@ import SettingsRoundTypes from './components/settings/SettingsRoundTypes';
 import SettingsExport from './components/settings/SettingsExport';
 import SettingsImport from './components/settings/SettingsImport';
 import SettingsAPIKey from './components/settings/SettingsAPIKey';
+import SettingsEmailSync from './components/settings/SettingsEmailSync';
 import SettingsProfile from './components/settings/SettingsProfile';
 import Schedule from './pages/Schedule';
 import CompanyPortals from './pages/CompanyPortals';
 import SOEDirectory from './pages/SOEDirectory';
+import ResumeWorkspace from './pages/ResumeWorkspace';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -125,6 +127,14 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/resumes"
+        element={
+          <ProtectedRoute>
+            <ResumeWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/analytics"
         element={
           <ProtectedRoute>
@@ -167,6 +177,7 @@ function AppRoutes() {
         <Route path="theme" element={<SettingsTheme />} />
         <Route path="features" element={<SettingsFeatures />} />
         <Route path="profile" element={<SettingsProfile />} />
+        <Route path="email-sync" element={<SettingsEmailSync />} />
         <Route path="api-key" element={<SettingsAPIKey />} />
         <Route path="statuses" element={<SettingsStatuses />} />
         <Route path="round-types" element={<SettingsRoundTypes />} />

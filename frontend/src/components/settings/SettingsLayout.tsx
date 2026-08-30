@@ -31,6 +31,7 @@ const settingsCategories: SettingsCategory[] = [
     name: 'Account',
     sections: [
       { path: 'profile', label: 'Profile', icon: 'bi-person' },
+      { path: 'email-sync', label: 'Email Sync', icon: 'bi-envelope' },
       { path: 'api-key', label: 'API Keys', icon: 'bi-key' },
     ],
   },

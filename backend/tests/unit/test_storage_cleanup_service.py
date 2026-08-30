@@ -11,6 +11,7 @@ from app.models import (
     Round,
     RoundMedia,
     RoundType,
+    TailoredResume,
     User,
 )
 
@@ -76,18 +77,21 @@ async def test_build_cleanup_report_classifies_references_orphans_and_suspicious
 
     referenced_cv_name = "a" * 64 + ".pdf"
     referenced_transcript_name = "b" * 64 + ".pdf"
+    referenced_resume_name = "9" * 64 + ".docx"
     orphan_root_name = "c" * 64 + ".pdf"
     orphan_user_name = "d" * 64 + ".mp3"
     missing_name = "e" * 64 + ".pdf"
 
     referenced_cv_path = upload_root / referenced_cv_name
     referenced_transcript_path = user_upload_dir / referenced_transcript_name
+    referenced_resume_path = upload_root / referenced_resume_name
     orphan_root_path = upload_root / orphan_root_name
     orphan_user_path = user_upload_dir / orphan_user_name
     suspicious_path = upload_root / "notes.txt"
 
     referenced_cv_path.write_bytes(b"cv-bytes")
     referenced_transcript_path.write_bytes(b"transcript-bytes")
+    referenced_resume_path.write_bytes(b"resume-bytes")
     orphan_root_path.write_bytes(b"orphan-root")
     orphan_user_path.write_bytes(b"orphan-user")
     suspicious_path.write_bytes(b"keep-me")
@@ -121,6 +125,19 @@ async def test_build_cleanup_report_classifies_references_orphans_and_suspicious
         media_type="audio",
     )
     db.add(media)
+    db.add(
+        TailoredResume(
+            user_id=cleanup_user.id,
+            company="Cleanup Co",
+            job_title="Engineer",
+            jd_text="A complete job description for cleanup testing.",
+            jd_analysis={},
+            content={},
+            validation={"valid": True, "errors": [], "warnings": []},
+            docx_path=f"uploads/{referenced_resume_name}",
+            status="approved",
+        )
+    )
     await db.commit()
 
     report = await build_cleanup_report(db, upload_root=upload_root)
@@ -128,6 +145,7 @@ async def test_build_cleanup_report_classifies_references_orphans_and_suspicious
     assert report.upload_root == upload_root.resolve()
     assert referenced_cv_path.resolve() in report.referenced_paths
     assert referenced_transcript_path.resolve() in report.referenced_paths
+    assert referenced_resume_path.resolve() in report.referenced_paths
     assert orphan_root_path.resolve() in report.orphan_paths
     assert orphan_user_path.resolve() in report.orphan_paths
     assert suspicious_path.resolve() in report.suspicious_paths

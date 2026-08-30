@@ -2,16 +2,41 @@
  * Main autofill engine that orchestrates detection and filling.
  */
 
-import type { AutofillProfile, AutofillResult, FieldType } from './types';
+import type {
+  AutofillProfile,
+  AutofillResult,
+  FieldPolicy,
+  FieldType,
+} from './types';
 import { scanForFillableFields } from './detection';
 import { fillField } from './filling';
+
+const SENSITIVE_FIELD_TYPES = new Set<FieldType>([
+  'expected_salary',
+  'work_authorization',
+  'requires_sponsorship',
+  'relocation',
+  'available_start_date',
+  'notice_period',
+  'employment_status',
+]);
+
+const NEVER_AUTOFILL_FIELD_TYPES = new Set<FieldType>([
+  'voluntary_self_identification',
+  'gender',
+  'race_ethnicity',
+  'veteran_status',
+  'disability_status',
+  'background_check',
+  'non_compete',
+]);
 
 /**
  * Field type to profile field mapping.
  */
 const FIELD_TO_PROFILE: Record<
   FieldType,
-  keyof AutofillProfile | '__combined__'
+  keyof AutofillProfile | '__combined__' | null
 > = {
   first_name: 'first_name',
   last_name: 'last_name',
@@ -21,7 +46,55 @@ const FIELD_TO_PROFILE: Record<
   city: 'city',
   country: 'country',
   linkedin_url: 'linkedin_url',
+  github_url: 'github_url',
+  portfolio_url: 'portfolio_url',
+  highest_degree: 'highest_degree',
+  current_school: 'current_school',
+  major: 'major',
+  education_start_date: 'education_start_date',
+  education_end_date: 'education_end_date',
+  graduation_year: 'graduation_year',
+  target_roles: 'target_roles',
+  preferred_locations: 'preferred_locations',
+  expected_salary: 'expected_salary',
+  work_authorization: 'authorized_to_work',
+  requires_sponsorship: 'requires_sponsorship',
+  relocation: null,
+  available_start_date: null,
+  notice_period: null,
+  employment_status: null,
+  voluntary_self_identification: null,
+  gender: null,
+  race_ethnicity: null,
+  veteran_status: null,
+  disability_status: null,
+  background_check: null,
+  non_compete: null,
+  skills: 'skills',
+  self_summary: 'self_summary',
 };
+
+function getFieldPolicy(fieldType: FieldType): FieldPolicy {
+  if (NEVER_AUTOFILL_FIELD_TYPES.has(fieldType)) {
+    return {
+      riskLevel: 'never',
+      autofillAllowed: false,
+      skipReason:
+        'JobHuntBot safety boundary: voluntary identity, legal, background, or non-compete fields require manual review.',
+    };
+  }
+
+  if (SENSITIVE_FIELD_TYPES.has(fieldType)) {
+    return {
+      riskLevel: 'sensitive',
+      autofillAllowed: false,
+      skipReason:
+        'JobHuntBot safety boundary: sensitive work authorization, sponsorship, compensation, start-date, relocation, or employment-status fields need explicit user confirmation.',
+    };
+  }
+
+  return { riskLevel: 'safe', autofillAllowed: true };
+}
 
 /**
  * Get the value for a field type from the profile.
@@ -32,12 +105,26 @@ function getFieldValue(
   profile: AutofillProfile
 ): string | null {
   if (fieldType === 'full_name') {
+    if (
+      profile.first_name &&
+      profile.last_name &&
+      /[\u4e00-\u9fff]/.test(`${profile.first_name}${profile.last_name}`)
+    ) {
+      return `${profile.last_name}${profile.first_name}`;
+    }
     const parts = [profile.first_name, profile.last_name].filter(Boolean);
     return parts.length > 0 ? parts.join(' ') : null;
   }
 
   const profileKey = FIELD_TO_PROFILE[fieldType] as keyof AutofillProfile;
-  return profile[profileKey];
+  if (!profileKey) {
+    return null;
+  }
+  const value = profile[profileKey];
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
+  }
+  return Array.isArray(value) ? value.join(', ') : (value ?? null);
 }
 
 /**
@@ -74,16 +161,26 @@ export class AutofillEngine {
     };
 
     for (const scoredField of scanResult.fillableFields) {
+      const policy = getFieldPolicy(scoredField.fieldType);
       const value = getFieldValue(scoredField.fieldType, profile);
 
       const fieldResult = {
         fieldType: scoredField.fieldType,
         filled: false,
         score: scoredField.score,
+        riskLevel: policy.riskLevel,
+        skipReason: policy.autofillAllowed ? undefined : policy.skipReason,
       };
+
+      if (!policy.autofillAllowed) {
+        result.skippedCount++;
+        result.fields.push(fieldResult);
+        continue;
+      }
 
       if (!value || value.trim() === '') {
         result.skippedCount++;
+        fieldResult.skipReason = 'No confirmed profile value available.';
         result.fields.push(fieldResult);
         continue;
       }
@@ -95,6 +192,7 @@ export class AutofillEngine {
         result.filledCount++;
       } else {
         result.skippedCount++;
+        fieldResult.skipReason = 'Field was disabled, read-only, hidden, already filled, or rejected by the page.';
       }
 
       result.fields.push(fieldResult);

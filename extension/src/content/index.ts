@@ -174,7 +174,36 @@ function aggregateAndReport(): void {
  * Send autofill command to all iframes.
  */
 function sendAutofillToIframes(profile: AutofillProfile): void {
-  iframeRegistry.sendAutofill(IFRAME_AUTOFILL, profile);
+  iframeRegistry.sendAutofill(IFRAME_AUTOFILL, safeIframeProfile(profile));
+}
+
+/**
+ * Keep cross-frame autofill payloads to low-risk profile facts only.
+ * JobHuntBot's safety contract treats compensation, sponsorship, work
+ * authorization, relocation, and identity/legal fields as manual-review items.
+ */
+function safeIframeProfile(profile: AutofillProfile): AutofillProfile {
+  return {
+    first_name: profile.first_name,
+    last_name: profile.last_name,
+    email: profile.email,
+    phone: profile.phone,
+    city: profile.city,
+    country: profile.country,
+    linkedin_url: profile.linkedin_url,
+    github_url: profile.github_url,
+    portfolio_url: profile.portfolio_url,
+    highest_degree: profile.highest_degree,
+    current_school: profile.current_school,
+    major: profile.major,
+    education_start_date: profile.education_start_date,
+    education_end_date: profile.education_end_date,
+    graduation_year: profile.graduation_year,
+    target_roles: profile.target_roles,
+    preferred_locations: profile.preferred_locations,
+    skills: profile.skills,
+    self_summary: profile.self_summary,
+  };
 }
 
 // ============================================================================
@@ -361,6 +390,8 @@ browser.runtime.onMessage.addListener(
 
       return Promise.resolve({
         filledCount: result.filledCount,
+        skippedCount: result.skippedCount,
+        fields: result.fields,
       });
     }
 

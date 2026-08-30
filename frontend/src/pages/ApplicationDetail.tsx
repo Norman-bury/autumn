@@ -21,10 +21,7 @@ import EmptyState from '../components/EmptyState';
 import ApplicationModal from '../components/ApplicationModal';
 import RecruitmentEventForm from '../components/RecruitmentEventForm';
 import RecruitmentEventList from '../components/RecruitmentEventList';
-import {
-  priorityLabel,
-  statusLabel,
-} from '../lib/recruitmentLabels';
+import { priorityLabel, statusLabel } from '../lib/recruitmentLabels';
 
 export default function ApplicationDetail() {
   const { id } = useParams<{ id: string }>();
@@ -440,6 +437,13 @@ export default function ApplicationDetail() {
           )}
 
           <div className="border-tertiary flex flex-wrap items-center justify-end gap-2 border-t pt-4">
+            <Link
+              to={`/resumes?applicationId=${application.id}`}
+              className="bg-accent text-bg0 hover:bg-accent-bright flex cursor-pointer items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-all duration-200 ease-in-out"
+            >
+              <i className="bi-file-earmark-person icon-sm"></i>
+              生成定制简历
+            </Link>
             <button
               onClick={() => setShowEditModal(true)}
               className="text-fg1 hover:bg-bg2 hover:text-fg0 flex cursor-pointer items-center gap-1.5 rounded bg-transparent px-3 py-1.5 text-sm transition-all duration-200 ease-in-out"
@@ -469,9 +473,7 @@ export default function ApplicationDetail() {
               onClick={() => setShowEventForm((visible) => !visible)}
               className="bg-accent text-bg0 hover:bg-accent-bright inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium"
             >
-              <i
-                className={`bi ${showEventForm ? 'bi-x-lg' : 'bi-plus-lg'}`}
-              />
+              <i className={`bi ${showEventForm ? 'bi-x-lg' : 'bi-plus-lg'}`} />
               {showEventForm ? '取消' : '新增节点'}
             </button>
           </div>
@@ -508,9 +510,7 @@ export default function ApplicationDetail() {
 
         <div className="bg-secondary rounded-lg p-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-primary text-lg font-semibold">
-              面试深度复盘
-            </h2>
+            <h2 className="text-primary text-lg font-semibold">面试深度复盘</h2>
             {application.rounds && application.rounds.length > 0 && (
               <button
                 onClick={() => setShowRoundForm(true)}

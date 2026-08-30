@@ -74,6 +74,9 @@ export default function Layout({ children }: Props) {
               <Link to="/applications" className={linkClass('/applications')}>
                 投递记录
               </Link>
+              <Link to="/resumes" className={linkClass('/resumes')}>
+                定制简历
+              </Link>
               <Link to="/schedule" className={linkClass('/schedule')}>
                 流程日程
               </Link>
@@ -83,10 +86,7 @@ export default function Layout({ children }: Props) {
               >
                 企业入口
               </Link>
-              <Link
-                to="/soe-directory"
-                className={linkClass('/soe-directory')}
-              >
+              <Link to="/soe-directory" className={linkClass('/soe-directory')}>
                 央企国企
               </Link>
               <Link to="/analytics" className={linkClass('/analytics')}>
@@ -150,6 +150,9 @@ export default function Layout({ children }: Props) {
                 className={mobileLinkClass('/applications')}
               >
                 投递记录
+              </Link>
+              <Link to="/resumes" className={mobileLinkClass('/resumes')}>
+                定制简历
               </Link>
               <Link to="/schedule" className={mobileLinkClass('/schedule')}>
                 流程日程

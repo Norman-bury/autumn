@@ -18,6 +18,7 @@ from app.api.applications import router as applications_router
 from app.api.auth import router as auth_router
 from app.api.company_portals import router as company_portals_router
 from app.api.dashboard import router as dashboard_router
+from app.api.email_sync import router as email_sync_router
 from app.api.export import router as export_router
 from app.api.files import router as files_router
 from app.api.import_router import router as import_router
@@ -28,6 +29,7 @@ from app.api.recruitment_events import router as recruitment_events_router
 from app.api.rounds import router as rounds_router
 from app.api.settings import router as settings_router
 from app.api.streak import router as streak_router
+from app.api.tailored_resumes import router as tailored_resumes_router
 from app.api.user_preferences import router as user_preferences_router
 from app.api.users import router as users_router
 from app.core.config import get_settings
@@ -127,9 +129,11 @@ app.include_router(import_router)
 app.include_router(job_leads_router)
 app.include_router(files_router)
 app.include_router(dashboard_router)
+app.include_router(email_sync_router)
 app.include_router(user_preferences_router)
 app.include_router(streak_router)
 app.include_router(ai_settings_router)
+app.include_router(tailored_resumes_router)
 app.include_router(insights_router, prefix="/api/analytics", tags=["insights"])
 app.include_router(users_router)
 

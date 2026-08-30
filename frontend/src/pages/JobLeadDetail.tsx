@@ -344,6 +344,15 @@ export default function JobLeadDetail() {
           )}
 
           <div className="border-tertiary flex flex-wrap items-center justify-end gap-2 border-t pt-4">
+            {jobLead.description && (
+              <Link
+                to={`/resumes?jobLeadId=${jobLead.id}`}
+                className="bg-accent text-bg0 hover:bg-accent-bright flex cursor-pointer items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-all duration-200 ease-in-out"
+              >
+                <i className="bi-file-earmark-person icon-sm"></i>
+                生成定制简历
+              </Link>
+            )}
             {canConvert && (
               <button
                 onClick={() => setShowConvertModal(true)}

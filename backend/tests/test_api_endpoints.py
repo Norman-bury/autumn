@@ -1362,6 +1362,88 @@ class TestProfileGet:
         assert data["email"] == "john@example.com"
         assert data["location"] == "San Francisco, CA"
 
+    async def test_get_autofill_profile_returns_minimal_safe_payload(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_user: User,
+        db: AsyncSession,
+    ):
+        """Autofill profile should expose safe fields and policy metadata only."""
+        test_user.city = "北京"
+        test_user.country = "中国"
+        profile = UserProfile(
+            user_id=test_user.id,
+            first_name="三",
+            last_name="张",
+            email="zhangsan@example.com",
+            phone="13800138000",
+            linkedin_url="https://linkedin.com/in/zhangsan",
+            github_url="https://github.com/zhangsan",
+            portfolio_url="https://zhangsan.example.com",
+            highest_degree="硕士",
+            graduation_year="2027",
+            target_roles=["算法工程师"],
+            preferred_locations=["北京", "杭州"],
+            expected_salary="30k-40k",
+            authorized_to_work="中国大陆",
+            requires_sponsorship=False,
+            skills=["Python", "FastAPI"],
+            work_history=[{"company": "Sensitive Corp"}],
+            education=[
+                {
+                    "institution": "Test University",
+                    "degree": "硕士",
+                    "field_of_study": "Computer Science",
+                    "start_date": "2024-09",
+                    "end_date": "2027-06",
+                }
+            ],
+            resume_file_path="uploads/private.pdf",
+            resume_versions=[
+                {
+                    "file_path": "uploads/private.pdf",
+                    "original_filename": "private.pdf",
+                    "uploaded_at": "2026-08-29T00:00:00+00:00",
+                    "is_current": True,
+                }
+            ],
+            resume_text="raw private resume text",
+        )
+        db.add(profile)
+        await db.commit()
+
+        response = await client.get("/api/profile/autofill", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["first_name"] == "三"
+        assert data["last_name"] == "张"
+        assert data["city"] == "北京"
+        assert data["github_url"] == "https://github.com/zhangsan"
+        assert data["current_school"] == "Test University"
+        assert data["major"] == "Computer Science"
+        assert data["education_start_date"] == "2024-09"
+        assert data["education_end_date"] == "2027-06"
+        assert data["target_roles"] == ["算法工程师"]
+        assert data["skills"] == ["Python", "FastAPI"]
+
+        assert "expected_salary" not in data
+        assert "authorized_to_work" not in data
+        assert "requires_sponsorship" not in data
+        assert "work_history" not in data
+        assert "education" not in data
+        assert "resume_file_path" not in data
+        assert "resume_versions" not in data
+        assert "resume_text" not in data
+
+        assert data["field_policies"]["email"]["risk_level"] == "safe"
+        assert data["field_policies"]["email"]["autofill_allowed"] is True
+        assert data["field_policies"]["expected_salary"]["risk_level"] == "sensitive"
+        assert data["field_policies"]["expected_salary"]["autofill_allowed"] is False
+        assert data["field_policies"]["gender"]["risk_level"] == "never"
+        assert "sponsorship" in data["never_guess"]
+
 
 class TestProfileUpdate:
     """Tests for PUT /api/profile endpoint."""
@@ -1963,4 +2045,122 @@ class TestCorsPolicy:
         assert (
             response.headers.get("access-control-allow-origin")
             == "chrome-extension://abcdefghijklmnop"
+        )
+
+
+class TestTailoredResumes:
+    async def test_create_approve_and_download_docx(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_user: User,
+        db: AsyncSession,
+        tmp_path,
+    ):
+        profile = UserProfile(
+            user_id=test_user.id,
+            first_name="测试用户",
+            email="candidate@example.com",
+            phone="13800138000",
+            highest_degree="硕士",
+            graduation_year="2027",
+            skills=["Python", "Agent", "RAG", "FastAPI"],
+            work_history=[
+                {
+                    "company": "AI公司",
+                    "title": "Agent实习生",
+                    "start_date": "2026-05",
+                    "end_date": "至今",
+                    "description": "负责Agent评测与工具编排。",
+                    "highlights": ["构建评测系统，准确率达到86%。"],
+                }
+            ],
+            projects=[
+                {
+                    "name": "知识库项目",
+                    "role": "核心开发",
+                    "start_date": "2025-01",
+                    "end_date": "2025-06",
+                    "description": "构建RAG知识库。",
+                    "technologies": ["RAG", "Python"],
+                    "highlights": ["完成3000+页文档解析。"],
+                }
+            ],
+            education=[
+                {
+                    "institution": "测试大学",
+                    "degree": "硕士",
+                    "field_of_study": "人工智能",
+                    "start_date": "2024-09",
+                    "end_date": "2027-06",
+                }
+            ],
+            resume_original_filename="普通简历.pdf",
+            resume_versions=[
+                {
+                    "file_path": "uploads/master.pdf",
+                    "original_filename": "测试用户_完整母版.pdf",
+                    "uploaded_at": "2026-08-30T00:00:00+00:00",
+                    "is_current": True,
+                }
+            ],
+        )
+        db.add(profile)
+        application_status = ApplicationStatus(
+            name="Resume Test",
+            normalized_name="resume test",
+            color="#83a598",
+            is_default=False,
+            user_id=test_user.id,
+            order=99,
+        )
+        db.add(application_status)
+        await db.flush()
+        application = Application(
+            user_id=test_user.id,
+            company="测试公司",
+            job_title="AI研发工程师",
+            job_description=(
+                "负责Agent系统架构、工具编排、RAG知识库、自动化评测和Python工程落地。"
+            ),
+            status_id=application_status.id,
+        )
+        db.add(application)
+        await db.commit()
+
+        create_response = await client.post(
+            "/api/tailored-resumes",
+            headers=auth_headers,
+            json={"application_id": application.id},
+        )
+        assert create_response.status_code == 201
+        draft = create_response.json()
+        assert draft["status"] == "draft"
+        assert draft["source_resume_filename"] == "测试用户_完整母版.pdf"
+        assert draft["content"]["experiences"][0]["heading"] == "AI公司"
+
+        with patch(
+            "app.api.tailored_resumes.get_settings",
+            return_value=SimpleNamespace(upload_dir=str(tmp_path)),
+        ):
+            approve_response = await client.post(
+                f"/api/tailored-resumes/{draft['id']}/approve",
+                headers=auth_headers,
+                json={"attach_to_application": True},
+            )
+            download_response = await client.get(
+                f"/api/tailored-resumes/{draft['id']}/download",
+                headers=auth_headers,
+            )
+
+        assert approve_response.status_code == 200
+        assert approve_response.json()["status"] == "approved"
+        assert approve_response.json()["docx_path"].endswith(".docx")
+        assert approve_response.json()["docx_filename"].endswith(".docx")
+        assert download_response.status_code == 200
+        assert download_response.content.startswith(b"PK")
+        await db.refresh(application)
+        assert application.cv_path == approve_response.json()["docx_path"]
+        assert (
+            application.cv_original_filename == approve_response.json()["docx_filename"]
         )

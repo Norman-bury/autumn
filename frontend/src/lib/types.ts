@@ -286,16 +286,84 @@ export interface JobLead {
 
 export interface UserProfile {
   id: string;
+  user_id: string;
   first_name: string | null;
   last_name: string | null;
   email: string | null;
   phone: string | null;
   location: string | null;
   linkedin_url: string | null;
+  github_url: string | null;
+  portfolio_url: string | null;
   city: string | null;
   country: string | null;
+  highest_degree: string | null;
+  graduation_year: string | null;
+  target_roles: string[] | null;
+  preferred_locations: string[] | null;
+  expected_salary: string | null;
   authorized_to_work: string | null;
   requires_sponsorship: boolean | null;
+  work_history: Record<string, unknown>[] | null;
+  education: Record<string, unknown>[] | null;
+  skills: string[] | null;
+  projects: Record<string, unknown>[] | null;
+  certificates: string[] | null;
+  languages: string[] | null;
+  self_summary: string | null;
+  resume_file_path: string | null;
+  resume_original_filename: string | null;
+  resume_versions: ResumeVersion[] | null;
+  resume_parsed_at: string | null;
+}
+
+export interface ResumeVersion {
+  file_path: string;
+  original_filename: string;
+  uploaded_at: string;
+  content_type: string | null;
+  size_bytes: number | null;
+  parsed_at: string | null;
+  source: string | null;
+  is_current: boolean;
+}
+
+export interface ResumeParseResponse {
+  profile: UserProfile;
+  extracted_text_preview: string;
+  source: 'ai' | 'heuristic';
+}
+
+export interface EmailSyncConfig {
+  id: string;
+  provider: string;
+  imap_host: string;
+  imap_port: number;
+  username: string;
+  use_ssl: boolean;
+  enabled: boolean;
+  has_password: boolean;
+  last_sync_at: string | null;
+}
+
+export interface RecruitmentMail {
+  id: string;
+  message_id: string;
+  subject: string;
+  sender: string | null;
+  received_at: string | null;
+  snippet: string | null;
+  category: string;
+  company: string | null;
+  status: string | null;
+  application_url: string | null;
+  created_at: string;
+}
+
+export interface EmailSyncResult {
+  imported: number;
+  skipped: number;
+  messages: RecruitmentMail[];
 }
 
 export interface APIKey {
@@ -311,4 +379,77 @@ export interface APIKey {
 
 export interface APIKeyCreateResponse extends APIKey {
   api_key: string;
+}
+
+export type RequirementCoverage = 'strong' | 'partial' | 'gap';
+
+export interface RequirementMatch {
+  key: string;
+  label: string;
+  coverage: RequirementCoverage;
+  evidence: string[];
+}
+
+export interface TailoredResumeEntry {
+  source_id: string;
+  heading: string;
+  subheading: string | null;
+  period: string | null;
+  bullets: string[];
+}
+
+export interface TailoredResumeEducation {
+  source_id: string;
+  institution: string;
+  degree: string;
+  field_of_study: string;
+  period: string | null;
+}
+
+export interface TailoredResumeContent {
+  target_role: string;
+  summary: string;
+  core_skills: string[];
+  experiences: TailoredResumeEntry[];
+  projects: TailoredResumeEntry[];
+  education: TailoredResumeEducation[];
+  additional: string[];
+}
+
+export interface TailoredResume {
+  id: string;
+  application_id: string | null;
+  job_lead_id: string | null;
+  company: string | null;
+  job_title: string;
+  source_resume_filename: string | null;
+  jd_text: string;
+  jd_analysis: {
+    keywords: string[];
+    requirements: RequirementMatch[];
+    strong_count: number;
+    partial_count: number;
+    gap_count: number;
+  };
+  content: TailoredResumeContent;
+  validation: {
+    valid: boolean;
+    errors: string[];
+    warnings: string[];
+  };
+  generation_strategy: string;
+  status: 'draft' | 'approved' | 'failed';
+  docx_path: string | null;
+  docx_filename: string | null;
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+}
+
+export interface TailoredResumeCreate {
+  job_description?: string;
+  job_title?: string;
+  company?: string;
+  application_id?: string;
+  job_lead_id?: string;
 }
