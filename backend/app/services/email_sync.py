@@ -5,6 +5,7 @@ from __future__ import annotations
 import email
 import imaplib
 import re
+import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from email.header import decode_header, make_header
@@ -32,6 +33,7 @@ RECRUITMENT_KEYWORDS = [
     "recruit",
     "candidate",
 ]
+IMAP_TIMEOUT_SECONDS = 20
 
 
 @dataclass(slots=True)
@@ -63,7 +65,10 @@ def _message_text(message: Message) -> str:
         for part in message.walk():
             content_type = part.get_content_type()
             disposition = part.get_content_disposition()
-            if disposition == "attachment" or content_type not in {"text/plain", "text/html"}:
+            if disposition == "attachment" or content_type not in {
+                "text/plain",
+                "text/html",
+            }:
                 continue
             payload = part.get_payload(decode=True)
             if payload:
@@ -87,7 +92,10 @@ def _categorize(text: str) -> tuple[str, str | None]:
         return "interview", "interview"
     if any(keyword in lowered for keyword in ["笔试", "测评", "assessment", "test"]):
         return "assessment", "assessment"
-    if any(keyword in lowered for keyword in ["拒绝", "遗憾", "not move forward", "unfortunately"]):
+    if any(
+        keyword in lowered
+        for keyword in ["拒绝", "遗憾", "not move forward", "unfortunately"]
+    ):
         return "rejection", "rejected"
     if any(keyword in lowered for keyword in ["投递", "申请", "application", "网申"]):
         return "application", "submitted"
@@ -144,13 +152,21 @@ def _parse_message(raw: bytes) -> ParsedRecruitmentMail | None:
     )
 
 
-def sync_imap_messages(config: EmailSyncConfig, limit: int = 50) -> list[ParsedRecruitmentMail]:
+def sync_imap_messages(
+    config: EmailSyncConfig, limit: int = 50
+) -> list[ParsedRecruitmentMail]:
     password = decrypt_api_key(config.encrypted_password or "")
     if not password:
         raise ValueError("Email password is not configured or cannot be decrypted")
 
     client_cls = imaplib.IMAP4_SSL if config.use_ssl else imaplib.IMAP4
-    with client_cls(config.imap_host, config.imap_port) as client:
+    with client_cls(
+        config.imap_host,
+        config.imap_port,
+        timeout=IMAP_TIMEOUT_SECONDS,
+    ) as client:
+        if not config.use_ssl:
+            client.starttls(ssl_context=ssl.create_default_context())
         client.login(config.username, password)
         client.select("INBOX")
         _, data = client.search(None, "ALL")

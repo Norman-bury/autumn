@@ -197,7 +197,7 @@ async def approve_tailored_resume(
     resume = await _get_owned_resume(db, user.id, resume_id)
     result = await db.execute(select(UserProfile).where(UserProfile.user_id == user.id))
     profile = result.scalar_one()
-    content = TailoredResumeContent.model_validate(resume.content)
+    content = data.content or TailoredResumeContent.model_validate(resume.content)
     analysis = analyze_job_description(resume.jd_text, profile)
     validation = validate_tailored_content(profile, content, analysis)
     if not validation["valid"]:
@@ -215,6 +215,7 @@ async def approve_tailored_resume(
         f"{resume.company + '_' if resume.company else ''}{resume.job_title}_定制简历.docx"
     )
 
+    resume.content = content.model_dump()
     resume.validation = validation
     resume.docx_path = stored_path
     resume.docx_filename = filename

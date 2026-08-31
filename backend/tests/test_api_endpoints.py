@@ -2138,6 +2138,8 @@ class TestTailoredResumes:
         assert draft["status"] == "draft"
         assert draft["source_resume_filename"] == "测试用户_完整母版.pdf"
         assert draft["content"]["experiences"][0]["heading"] == "AI公司"
+        edited_content = draft["content"]
+        edited_content["summary"] = "聚焦Agent系统落地与评测。"
 
         with patch(
             "app.api.tailored_resumes.get_settings",
@@ -2146,7 +2148,10 @@ class TestTailoredResumes:
             approve_response = await client.post(
                 f"/api/tailored-resumes/{draft['id']}/approve",
                 headers=auth_headers,
-                json={"attach_to_application": True},
+                json={
+                    "attach_to_application": True,
+                    "content": edited_content,
+                },
             )
             download_response = await client.get(
                 f"/api/tailored-resumes/{draft['id']}/download",
@@ -2155,6 +2160,9 @@ class TestTailoredResumes:
 
         assert approve_response.status_code == 200
         assert approve_response.json()["status"] == "approved"
+        assert (
+            approve_response.json()["content"]["summary"] == edited_content["summary"]
+        )
         assert approve_response.json()["docx_path"].endswith(".docx")
         assert approve_response.json()["docx_filename"].endswith(".docx")
         assert download_response.status_code == 200
@@ -2164,3 +2172,48 @@ class TestTailoredResumes:
         assert (
             application.cv_original_filename == approve_response.json()["docx_filename"]
         )
+
+
+class TestResumeUpload:
+    async def test_successful_upload_returns_typed_profile_response(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        tmp_path,
+    ):
+        with (
+            patch(
+                "app.api.profile.get_settings",
+                return_value=SimpleNamespace(
+                    max_document_size_mb=10,
+                    upload_dir=str(tmp_path),
+                ),
+            ),
+            patch(
+                "app.api.profile.extract_resume_text_from_pdf",
+                return_value=(
+                    "测试用户\ncandidate@example.com\nPython Agent\n2027届硕士"
+                ),
+            ),
+            patch(
+                "app.api.profile.get_ai_settings",
+                new=AsyncMock(return_value=SimpleNamespace(is_configured=False)),
+            ),
+        ):
+            response = await client.post(
+                "/api/profile/resume",
+                headers=auth_headers,
+                files={
+                    "file": (
+                        "resume.pdf",
+                        b"%PDF-test-content",
+                        "application/pdf",
+                    )
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["source"] == "heuristic"
+        assert data["profile"]["email"] == "candidate@example.com"
+        assert data["profile"]["resume_original_filename"] == "resume.pdf"

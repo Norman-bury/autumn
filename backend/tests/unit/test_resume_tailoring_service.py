@@ -109,6 +109,39 @@ def test_validation_rejects_numbers_not_found_in_master_profile():
     assert "999" in validation["errors"][0]
 
 
+def test_summary_uses_profile_facts_instead_of_fixed_ai_claims():
+    profile = make_profile()
+    profile.highest_degree = "本科"
+    profile.education[0]["degree"] = "本科"
+    profile.skills = ["Java", "SQL"]
+    profile.work_history = [
+        {
+            "company": "软件公司",
+            "title": "后端实习生",
+            "description": "负责Java接口开发。",
+            "highlights": ["完成接口开发与测试。"],
+        }
+    ]
+    profile.projects = [
+        {
+            "name": "管理系统",
+            "role": "开发",
+            "description": "使用Java和SQL开发。",
+            "highlights": ["完成管理功能。"],
+        }
+    ]
+
+    _, content, validation = build_tailored_content(
+        "后端开发工程师", "负责Java服务与SQL数据库开发。", profile
+    )
+
+    assert "本科" in content.summary
+    assert "硕士" not in content.summary
+    assert "Agent" not in content.summary
+    assert "模型微调" not in content.summary
+    assert validation["valid"] is True
+
+
 def test_render_docx_contains_confirmed_profile_and_resume_content():
     profile = make_profile()
     user = User(email="candidate@example.com", password_hash="x", city="北京")

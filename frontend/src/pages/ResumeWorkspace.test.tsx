@@ -140,10 +140,17 @@ describe('ResumeWorkspace', () => {
       );
     });
 
+    fireEvent.change(screen.getByLabelText('个人概述'), {
+      target: { value: '最终确认版本。' },
+    });
     fireEvent.click(screen.getByRole('button', { name: '确认并生成DOCX' }));
 
     await waitFor(() => {
-      expect(approveTailoredResume).toHaveBeenCalledWith('resume-1', false);
+      expect(approveTailoredResume).toHaveBeenCalledWith(
+        'resume-1',
+        false,
+        expect.objectContaining({ summary: '最终确认版本。' })
+      );
     });
     expect(
       await screen.findByRole('button', { name: '下载DOCX' })

@@ -145,15 +145,19 @@ export default function ResumeWorkspace() {
     if (!draft) return;
     setApproving(true);
     try {
+      const attachToApplication = Boolean(draft.application_id);
       const approved = await approveTailoredResume(
         draft.id,
-        Boolean(applicationId)
+        attachToApplication,
+        draft.content
       );
       setDraft(approved);
       setResumes((current) =>
         current.map((item) => (item.id === approved.id ? approved : item))
       );
-      toast.success(applicationId ? 'DOCX已生成并绑定投递' : 'DOCX已生成');
+      toast.success(
+        attachToApplication ? 'DOCX已生成并绑定投递' : 'DOCX已生成'
+      );
     } catch {
       toast.error('确认失败，请先处理事实校验问题');
     } finally {

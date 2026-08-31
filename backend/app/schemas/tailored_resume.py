@@ -61,6 +61,7 @@ class TailoredResumeUpdate(BaseModel):
 
 class TailoredResumeApprove(BaseModel):
     attach_to_application: bool = True
+    content: TailoredResumeContent | None = None
 
 
 class TailoredResumeResponse(BaseModel):

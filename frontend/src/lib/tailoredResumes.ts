@@ -33,11 +33,12 @@ export async function updateTailoredResume(
 
 export async function approveTailoredResume(
   id: string,
-  attachToApplication: boolean
+  attachToApplication: boolean,
+  content: TailoredResumeContent
 ): Promise<TailoredResume> {
   const response = await api.post<TailoredResume>(
     `/api/tailored-resumes/${id}/approve`,
-    { attach_to_application: attachToApplication }
+    { attach_to_application: attachToApplication, content }
   );
   return response.data;
 }

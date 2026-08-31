@@ -222,6 +222,36 @@ def _entry_from_item(
     )
 
 
+def _build_summary(
+    profile: UserProfile,
+    job_title: str,
+    ordered_skills: list[str],
+) -> str:
+    primary_education = (profile.education or [{}])[0]
+    degree = profile.highest_degree or primary_education.get("degree")
+    identity = "".join(
+        value
+        for value in [
+            f"{profile.graduation_year}届" if profile.graduation_year else "",
+            str(degree or ""),
+        ]
+        if value
+    )
+    sentences = [
+        f"{identity or '应届候选人'}，目标岗位：{job_title}。",
+    ]
+    if ordered_skills:
+        sentences.append(f"相关技能包括{'、'.join(ordered_skills[:6])}。")
+    experience_types = []
+    if profile.work_history:
+        experience_types.append("实习")
+    if profile.projects:
+        experience_types.append("项目")
+    if experience_types:
+        sentences.append(f"具备{'与'.join(experience_types)}实践经历。")
+    return "".join(sentences)
+
+
 def build_tailored_content(
     job_title: str, job_description: str, profile: UserProfile
 ) -> tuple[dict[str, Any], TailoredResumeContent, dict[str, Any]]:
@@ -267,14 +297,9 @@ def build_tailored_content(
     if profile.languages:
         additional.append("语言：" + "、".join(profile.languages))
 
-    cohort = f"{profile.graduation_year}届" if profile.graduation_year else "应届"
     content = TailoredResumeContent(
         target_role=job_title,
-        summary=(
-            f"{cohort}硕士应届生，"
-            "聚焦大模型、Agent、RAG与AI工程化，"
-            "具备Agent评测、知识库构建、模型微调和推理服务落地经验。"
-        ),
+        summary=_build_summary(profile, job_title, skills),
         core_skills=skills[:18],
         experiences=experiences,
         projects=project_entries,
